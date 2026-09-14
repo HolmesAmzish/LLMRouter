@@ -1,7 +1,7 @@
 package cn.arorms.llm.router.app
 
-import cn.arorms.llm.router.app.adapter.Adapters
-import cn.arorms.llm.router.common.Protocol
+import cn.arorms.llm.router.app.adapters.Adapters
+import cn.arorms.llm.router.common.enums.Protocol
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import kotlin.test.Test
 import kotlin.test.assertEquals
