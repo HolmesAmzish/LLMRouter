@@ -1,9 +1,14 @@
 import { useState } from 'react'
+import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import AccountsPage from './pages/AccountsPage'
 import ModelsPage from './pages/ModelsPage'
 import SessionsPage from './pages/SessionsPage'
 import UsagePage from './pages/UsagePage'
 import PlaygroundPage from './pages/PlaygroundPage'
+import { ProtectedRoute } from './components/ProtectedRoute'
+import { CallbackPage } from './features/login/CallbackPage'
+import { LoginPage } from './features/login/LoginPage'
+import { useAuth } from './hooks/useAuth'
 
 type Page = 'accounts' | 'models' | 'sessions' | 'usage' | 'playground'
 
@@ -15,9 +20,10 @@ const navigation: { id: Page; label: string }[] = [
   { id: 'playground', label: 'Playground' },
 ]
 
-export default function App() {
+function AppShell() {
   const [page, setPage] = useState<Page>('accounts')
   const [refreshKey, setRefreshKey] = useState(0)
+  const { user, logout } = useAuth()
 
   return (
     <div className="flex min-h-full">
@@ -50,7 +56,16 @@ export default function App() {
             </select>
             <h1 className="text-sm font-medium capitalize">{page}</h1>
           </div>
-          <button className="h-8 rounded-md border border-border px-3 text-xs" onClick={() => setRefreshKey((key) => key + 1)}>Sync UI</button>
+          <div className="flex items-center gap-2">
+            <button className="h-8 rounded-md border border-border px-3 text-xs" onClick={() => setRefreshKey((key) => key + 1)}>Sync UI</button>
+            <div className="flex h-8 items-center gap-2 rounded-md border border-border px-2">
+              <div className="grid h-5 w-5 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
+                {(user?.username?.[0] ?? 'A').toUpperCase()}
+              </div>
+              <span className="hidden text-xs sm:inline">{user?.username ?? 'Admin'}</span>
+              <button className="ml-1 text-xs text-muted-foreground hover:text-danger" onClick={logout}>Logout</button>
+            </div>
+          </div>
         </header>
         <div key={refreshKey} className="p-4 lg:p-6">
           {page === 'accounts' && <AccountsPage onChanged={() => setRefreshKey((key) => key + 1)} />}
@@ -61,5 +76,17 @@ export default function App() {
         </div>
       </main>
     </div>
+  )
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/callback" element={<CallbackPage />} />
+        <Route path="/*" element={<ProtectedRoute><AppShell /></ProtectedRoute>} />
+      </Routes>
+    </BrowserRouter>
   )
 }

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from '../lib/api'
+import { api } from '../api/api'
 import type { Protocol, SessionResponse } from '../types'
 import { Alert, Badge, Button, Card, CardHeader, EmptyState, Field, inputClass } from '../components/ui'
 

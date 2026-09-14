@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { getAccessToken } from '../api/auth'
 import type { Protocol, ThinkingEffort } from '../types'
 import { Alert, Button, Card, CardHeader, Field, inputClass } from '../components/ui'
 
@@ -61,7 +62,12 @@ export default function PlaygroundPage() {
           : stream
             ? `/v1beta/models/${model}:streamGenerateContent?alt=sse`
             : `/v1beta/models/${model}:generateContent`
-      const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      const accessToken = await getAccessToken()
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}) },
+        body: JSON.stringify(body),
+      })
 
       if (!response.ok) {
         const payload = await response.json().catch(() => null)
