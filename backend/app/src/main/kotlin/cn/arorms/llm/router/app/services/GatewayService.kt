@@ -1,16 +1,26 @@
 package cn.arorms.llm.router.app.services
 
 import cn.arorms.llm.router.app.adapters.Adapters
+import cn.arorms.llm.router.app.adapters.InboundStreamState
+import cn.arorms.llm.router.app.adapters.SseFrame
+import cn.arorms.llm.router.app.adapters.StreamAdapters
 import cn.arorms.llm.router.app.entities.ProviderAccount
 import cn.arorms.llm.router.app.repositories.ProviderAccountRepository
 import cn.arorms.llm.router.app.repositories.SessionRepository
 import cn.arorms.llm.router.common.responses.ChatResponse
+import cn.arorms.llm.router.common.responses.ChatStreamChunk
+import cn.arorms.llm.router.common.responses.Usage
 import cn.arorms.llm.router.common.enums.Protocol
 import com.fasterxml.jackson.databind.JsonNode
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.reactive.asFlow
+import kotlinx.coroutines.reactor.flux
 import kotlinx.coroutines.withContext
+import org.springframework.http.codec.ServerSentEvent
 import org.springframework.stereotype.Service
+import reactor.core.publisher.Flux
 import org.springframework.web.server.ResponseStatusException
 import org.springframework.http.HttpStatus
 
@@ -21,6 +31,7 @@ class GatewayService(
     private val usageRecorder: UsageRecorder,
     private val cacheService: CacheService,
     private val httpClient: GatewayHttpClient,
+    private val streamingClient: GatewayStreamingClient,
     private val mapper: ObjectMapper
 ) {
     suspend fun chat(body: JsonNode, inboundProtocol: Protocol): JsonNode = withContext(Dispatchers.IO) {
@@ -50,6 +61,85 @@ class GatewayService(
         response
     }
 
+
+    fun chatStream(body: JsonNode, inboundProtocol: Protocol): Flux<ServerSentEvent<String>> = flux(Dispatchers.IO) {
+        val request = Adapters.parseRequest(body, inboundProtocol).copy(stream = true)
+        val account = selectAccount(inboundProtocol)
+        val outboundModel = account.modelMapping[request.model] ?: request.model
+        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = outboundModel), account.protocol)
+        val startedAt = System.nanoTime()
+        val state = InboundStreamState(requestedModel = request.model)
+        val chunks = mutableListOf<ChatStreamChunk>()
+        val passthrough = request.stream && inboundProtocol == account.protocol
+
+        try {
+            streamingClient
+                .stream(streamingUrl(account, outboundModel), headers(account), mapper.writeValueAsString(outboundRequest))
+                .asFlow()
+                .collect { event: ServerSentEvent<String> ->
+                    val upstreamData = event.data()
+                    val chunk = StreamAdapters.parseUpstreamEvent(upstreamData, account.protocol)
+                    chunk?.let(chunks::add)
+
+                    val frames: List<SseFrame> = if (passthrough) {
+                        listOf(SseFrame(event = event.event(), data = upstreamData ?: ""))
+                    } else {
+                        StreamAdapters.toInboundFrames(chunk, inboundProtocol, state)
+                    }
+
+                    frames.forEach { frame ->
+                        if (frame.data.isNotBlank()) {
+                            val builder = ServerSentEvent.builder<String>(frame.data)
+                            frame.event?.takeIf { it.isNotBlank() }?.let(builder::event)
+                            send(builder.build())
+                        }
+                    }
+                }
+
+            if (!passthrough) {
+                StreamAdapters.doneFrame(inboundProtocol)?.let { frame ->
+                    send(ServerSentEvent.builder<String>(frame.data).build())
+                }
+            }
+
+            val usage = Usage(
+                inputTokens = chunks.maxOfOrNull { it.usage?.inputTokens ?: 0L } ?: 0L,
+                outputTokens = chunks.lastOrNull { it.usage?.outputTokens != null }?.usage?.outputTokens
+                    ?: chunks.sumOf { it.usage?.outputTokens ?: 0L },
+                costCents = null
+            )
+            val response = ChatResponse(
+                id = chunks.firstOrNull { it.id.isNotBlank() }?.id ?: state.fallbackId(),
+                model = chunks.firstOrNull { it.model.isNotBlank() }?.model ?: request.model,
+                choices = emptyList(),
+                usage = usage,
+                provider = account.protocol.name,
+                accountName = account.name,
+                createdAt = startedAt / 1_000_000_000
+            )
+            usageRecorder.record(request.sessionId, account, request.model, response, startedAt, "success")
+            usageRecorder.updateSession(request.sessionId, response)
+        } catch (cause: Throwable) {
+            usageRecorder.record(
+                sessionId = request.sessionId,
+                account = account,
+                requestedModel = request.model,
+                response = ChatResponse(
+                    id = state.fallbackId(),
+                    model = request.model,
+                    choices = emptyList(),
+                    usage = null,
+                    provider = account.protocol.name,
+                    accountName = account.name,
+                    createdAt = System.nanoTime() / 1_000_000_000
+                ),
+                startedAt = startedAt,
+                status = "failed"
+            )
+            throw cause
+        }
+    }
+
     private fun selectAccount(protocol: Protocol): ProviderAccount {
         val accounts = accountRepository.findByEnabledTrueOrderByPriorityAscIdAsc().filter { it.protocol == protocol }
         if (accounts.isEmpty()) throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No enabled ${protocol.name} account")
@@ -69,6 +159,12 @@ class GatewayService(
         Protocol.OPENAI -> "${account.baseUrl}/v1/chat/completions"
         Protocol.ANTHROPIC -> "${account.baseUrl}/v1/messages"
         Protocol.GEMINI -> "${account.baseUrl}/v1beta/models/$model:generateContent"
+    }
+
+    private fun streamingUrl(account: ProviderAccount, model: String): String = when (account.protocol) {
+        Protocol.OPENAI -> "${account.baseUrl}/v1/chat/completions"
+        Protocol.ANTHROPIC -> "${account.baseUrl}/v1/messages"
+        Protocol.GEMINI -> "${account.baseUrl}/v1beta/models/$model:streamGenerateContent?alt=sse"
     }
 
     private fun headers(account: ProviderAccount): Map<String, String> = when (account.protocol) {

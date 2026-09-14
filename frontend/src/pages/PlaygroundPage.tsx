@@ -18,6 +18,7 @@ export default function PlaygroundPage() {
   const [messages, setMessages] = useState<ChatMessageView[]>([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [stream, setStream] = useState(true)
 
   const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader()
@@ -53,17 +54,75 @@ export default function PlaygroundPage() {
       if (thinkingEffort !== 'NONE') { body.reasoning_effort = thinkingEffort.toLowerCase() }
       if (toolJson.trim()) { body.tools = JSON.parse(toolJson) }
 
-      const path = protocol === 'OPENAI' ? '/v1/chat/completions' : protocol === 'ANTHROPIC' ? '/v1/messages' : `/v1beta/models/${model}:generateContent`
-      const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-      const payload = await response.json()
-      if (!response.ok) throw new Error(payload?.error?.message ?? payload?.message ?? `Request failed: ${response.status}`)
-
-      const text = protocol === 'OPENAI'
-        ? payload.choices?.[0]?.message?.content ?? ''
+      const path = protocol === 'OPENAI'
+        ? '/v1/chat/completions'
         : protocol === 'ANTHROPIC'
-          ? payload.content?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
-          : payload.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
-      setMessages((current) => [...current, { role: 'assistant', content: text }])
+          ? '/v1/messages'
+          : stream
+            ? `/v1beta/models/${model}:streamGenerateContent?alt=sse`
+            : `/v1beta/models/${model}:generateContent`
+      const response = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null)
+        throw new Error(payload?.error?.message ?? payload?.message ?? `Request failed: ${response.status}`)
+      }
+
+      const contentType = response.headers.get('content-type') ?? ''
+      if (stream && contentType.includes('text/event-stream')) {
+        const reader = response.body?.getReader()
+        if (!reader) throw new Error('Streaming is not supported by this browser')
+        const decoder = new TextDecoder()
+        let buffer = ''
+        let anthropicEvent = ''
+        setMessages((current) => [...current, { role: 'assistant', content: '' }])
+
+        const appendDelta = (delta: string) => {
+          if (!delta) return
+          setMessages((current) => {
+            const next = [...current]
+            const last = next[next.length - 1]
+            if (last?.role === 'assistant') next[next.length - 1] = { ...last, content: last.content + delta }
+            return next
+          })
+        }
+
+        const handleData = (payload: string) => {
+          if (!payload || payload === '[DONE]') return
+          const parsed = JSON.parse(payload)
+          if (protocol === 'OPENAI') {
+            appendDelta(parsed.choices?.[0]?.delta?.content ?? '')
+          } else if (protocol === 'ANTHROPIC') {
+            if (parsed.type === 'content_block_delta') appendDelta(parsed.delta?.text ?? '')
+          } else {
+            appendDelta(parsed.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? '').join('') ?? '')
+          }
+        }
+
+        while (true) {
+          const { value, done } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+          const lines = buffer.split(/\r?\n/)
+          buffer = lines.pop() ?? ''
+          for (const line of lines) {
+            if (line.startsWith('event:')) anthropicEvent = line.slice(6).trim()
+            else if (line.startsWith('data:')) {
+              const payload = line.slice(5).trim()
+              if (protocol === 'ANTHROPIC' && anthropicEvent !== 'content_block_delta') continue
+              handleData(payload)
+            }
+          }
+        }
+      } else {
+        const payload = await response.json()
+        const text = protocol === 'OPENAI'
+          ? payload.choices?.[0]?.message?.content ?? ''
+          : protocol === 'ANTHROPIC'
+            ? payload.content?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
+            : payload.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
+        setMessages((current) => [...current, { role: 'assistant', content: text }])
+      }
       setImage(null)
     } catch (cause) {
       setError(String(cause instanceof Error ? cause.message : cause))
@@ -113,6 +172,7 @@ export default function PlaygroundPage() {
               {efforts.map((item) => <option key={item} value={item}>{item}</option>)}
             </select>
           </Field>
+          <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={stream} onChange={(event) => setStream(event.target.checked)} /> Stream response</label>
           <Field label="Tools JSON (OpenAI format)"><textarea className={`${inputClass} h-28 font-mono`} value={toolJson} onChange={(event) => setToolJson(event.target.value)} placeholder="[{&quot;type&quot;:&quot;function&quot;,...}]" /></Field>
         </form>
       </Card>
