@@ -1,11 +1,11 @@
-export type Protocol = 'OPENAI' | 'ANTHROPIC' | 'GEMINI'
+export type Protocol = 'OPENAI' | 'OPENAI_RESPONSES' | 'ANTHROPIC'
+// export type Protocol = 'OPENAI' | 'OPENAI_RESPONSES' | 'ANTHROPIC' | 'GEMINI'
 export type ThinkingEffort = 'NONE' | 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH'
 
 export type ProviderAccount = {
   id: number
   name: string
-  protocol: Protocol
-  baseUrl: string
+  protocolEndpoints: Partial<Record<Protocol, string>>
   enabled: boolean
   priority: number
   weight: number

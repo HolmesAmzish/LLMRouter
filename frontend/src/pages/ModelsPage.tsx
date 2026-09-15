@@ -3,7 +3,7 @@ import { api } from '../api/api'
 import type { ModelListResponse, Protocol } from '../types'
 import { Alert, Button, Card, CardHeader, EmptyState, Field, inputClass } from '../components/ui'
 
-const protocols: Protocol[] = ['OPENAI', 'ANTHROPIC', 'GEMINI']
+const protocols: Protocol[] = ['OPENAI', 'OPENAI_RESPONSES', 'ANTHROPIC']
 
 export default function ModelsPage() {
   const [models, setModels] = useState<string[]>([])

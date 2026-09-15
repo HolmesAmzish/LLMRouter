@@ -4,13 +4,13 @@ import cn.arorms.llm.router.common.enums.AccountStatus
 import cn.arorms.llm.router.common.enums.Protocol
 
 /**
- * Admin-facing representation of an upstream provider account.
+ * Admin-facing representation of an upstream provider and all supported
+ * protocol endpoints.
  */
 data class ProviderAccountResponse(
     val id: Long,
     val name: String,
-    val protocol: Protocol,
-    val baseUrl: String,
+    val protocolEndpoints: Map<Protocol, String>,
     val enabled: Boolean,
     val priority: Int,
     val weight: Int,

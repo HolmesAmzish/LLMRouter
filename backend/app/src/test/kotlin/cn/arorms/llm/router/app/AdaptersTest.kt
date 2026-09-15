@@ -21,13 +21,13 @@ class AdaptersTest {
     }
 
     @Test
-    fun `anthropic request converts to gemini`() {
+    fun `anthropic request converts to anthropic`() {
         val anthropic = mapper.readTree("""
             {"model":"claude-3-5-sonnet","system":"You are helpful","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}
         """.trimIndent())
         val canonical = Adapters.parseRequest(anthropic, Protocol.ANTHROPIC)
-        val outbound = Adapters.toOutboundRequest(canonical, Protocol.GEMINI)
-        assertEquals("You are helpful", outbound.path("systemInstruction").path("parts").get(0).path("text").asText())
-        assertEquals("Hello", outbound.path("contents").get(0).path("parts").get(0).path("text").asText())
+        val outbound = Adapters.toOutboundRequest(canonical, Protocol.ANTHROPIC)
+        assertEquals("You are helpful", outbound.path("system").get(0).path("text").asText())
+        assertEquals("Hello", outbound.path("messages").get(0).path("content").get(0).path("text").asText())
     }
 }

@@ -3,12 +3,12 @@ package cn.arorms.llm.router.common.requests
 import cn.arorms.llm.router.common.enums.Protocol
 
 /**
- * Request payload for registering an upstream provider account.
+ * Request payload for registering one upstream provider with one or more
+ * protocol-specific base URLs.
  */
 data class ProviderAccountRequest(
     val name: String,
-    val protocol: Protocol,
-    val baseUrl: String,
+    val protocolEndpoints: Map<Protocol, String>,
     val apiKey: String,
     val enabled: Boolean = true,
     val priority: Int = 100,

@@ -3,12 +3,11 @@ package cn.arorms.llm.router.common.requests
 import cn.arorms.llm.router.common.enums.Protocol
 
 /**
- * Partial-update payload for an upstream provider account.
+ * Partial-update payload for an upstream provider.
  */
 data class ProviderAccountPatch(
     val name: String? = null,
-    val protocol: Protocol? = null,
-    val baseUrl: String? = null,
+    val protocolEndpoints: Map<Protocol, String>? = null,
     val apiKey: String? = null,
     val enabled: Boolean? = null,
     val priority: Int? = null,

@@ -16,8 +16,8 @@ object StreamAdapters {
         val body = runCatching { mapper.readTree(data) }.getOrNull() ?: return null
         return when (protocol) {
             Protocol.OPENAI -> parseOpenAi(body)
+            Protocol.OPENAI_RESPONSES -> parseOpenAiResponses(body)
             Protocol.ANTHROPIC -> parseAnthropic(body)
-            Protocol.GEMINI -> parseGemini(body)
         }
     }
 
@@ -29,8 +29,8 @@ object StreamAdapters {
         if (chunk == null) return emptyList()
         return when (protocol) {
             Protocol.OPENAI -> listOf(openAiFrame(chunk, state))
+            Protocol.OPENAI_RESPONSES -> openAiResponsesFrames(chunk, state)
             Protocol.ANTHROPIC -> anthropicFrames(chunk, state)
-            Protocol.GEMINI -> listOf(geminiFrame(chunk, state))
         }
     }
 
@@ -56,6 +56,46 @@ object StreamAdapters {
                 )
             }
         )
+    }
+
+    private fun parseOpenAiResponses(node: JsonNode): ChatStreamChunk? {
+        val type = node.path("type").asText()
+        return when (type) {
+            "response.created" -> {
+                val response = node.path("response")
+                ChatStreamChunk(
+                    id = response.path("id").asText(""),
+                    model = response.path("model").asText(""),
+                    index = 0,
+                    delta = "",
+                    finishReason = null,
+                    usage = null
+                )
+            }
+            "response.output_text.delta" -> ChatStreamChunk(
+                id = "",
+                model = "",
+                index = node.path("output_index").asInt(0),
+                delta = node.path("delta").asText(""),
+                finishReason = null,
+                usage = null
+            )
+            "response.completed" -> {
+                val response = node.path("response")
+                ChatStreamChunk(
+                    id = response.path("id").asText(""),
+                    model = response.path("model").asText(""),
+                    index = 0,
+                    delta = "",
+                    finishReason = response.path("status").asText("completed"),
+                    usage = Usage(
+                        inputTokens = response.path("usage").path("input_tokens").asLong(0),
+                        outputTokens = response.path("usage").path("output_tokens").asLong(0)
+                    )
+                )
+            }
+            else -> null
+        }
     }
 
     private fun parseAnthropic(node: JsonNode): ChatStreamChunk? {
@@ -134,6 +174,43 @@ object StreamAdapters {
             usageNode.put("total_tokens", usage.totalTokens)
         }
         return SseFrame(data = mapper.writeValueAsString(body))
+    }
+
+    private fun openAiResponsesFrames(chunk: ChatStreamChunk, state: InboundStreamState): List<SseFrame> {
+        val frames = mutableListOf<SseFrame>()
+        if (chunk.id.isNotBlank() && !state.messageStarted) {
+            state.messageStarted = true
+            state.id = chunk.id
+            state.model = chunk.model.ifBlank { state.model }
+            val created = mapper.createObjectNode()
+                .put("type", "response.created")
+                .putObject("response")
+                .put("id", state.id)
+                .put("model", state.model)
+            frames += SseFrame("response.created", mapper.writeValueAsString(created))
+        }
+        if (chunk.delta.isNotEmpty()) {
+            val delta = mapper.createObjectNode()
+                .put("type", "response.output_text.delta")
+                .put("delta", chunk.delta)
+            frames += SseFrame("response.output_text.delta", mapper.writeValueAsString(delta))
+        }
+        if (chunk.finishReason != null) {
+            val completed = mapper.createObjectNode()
+                .put("type", "response.completed")
+                .putObject("response")
+                .put("id", state.id)
+                .put("model", state.model)
+                .put("status", chunk.finishReason)
+            chunk.usage?.let { usage ->
+                completed.putObject("usage")
+                    .put("input_tokens", usage.inputTokens)
+                    .put("output_tokens", usage.outputTokens)
+                    .put("total_tokens", usage.totalTokens)
+            }
+            frames += SseFrame("response.completed", mapper.writeValueAsString(completed))
+        }
+        return frames
     }
 
     private fun anthropicFrames(chunk: ChatStreamChunk?, state: InboundStreamState): List<SseFrame> {

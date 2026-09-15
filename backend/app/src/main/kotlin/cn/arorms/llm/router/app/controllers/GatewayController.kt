@@ -1,11 +1,10 @@
 package cn.arorms.llm.router.app.controllers
 
-import cn.arorms.llm.router.common.enums.Protocol
-import com.fasterxml.jackson.databind.JsonNode
-import com.fasterxml.jackson.databind.node.ObjectNode
 import cn.arorms.llm.router.app.services.GatewayService
 import cn.arorms.llm.router.app.services.ModelService
+import cn.arorms.llm.router.common.enums.Protocol
 import cn.arorms.llm.router.common.responses.ModelListResponse
+import com.fasterxml.jackson.databind.JsonNode
 import kotlinx.coroutines.reactor.mono
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.bind.annotation.*
@@ -18,11 +17,19 @@ class GatewayController(
     private val modelService: ModelService
 ) {
     @PostMapping("/v1/chat/completions")
-    fun openAi(@RequestBody body: JsonNode): Any {
+    fun openAiChat(@RequestBody body: JsonNode): Any {
         if (body.path("stream").asBoolean(false)) {
             return gatewayService.chatStream(body, Protocol.OPENAI)
         }
         return mono { gatewayService.chat(body, Protocol.OPENAI) }
+    }
+
+    @PostMapping("/v1/responses")
+    fun openAiResponses(@RequestBody body: JsonNode): Any {
+        if (body.path("stream").asBoolean(false)) {
+            return gatewayService.chatStream(body, Protocol.OPENAI_RESPONSES)
+        }
+        return mono { gatewayService.chat(body, Protocol.OPENAI_RESPONSES) }
     }
 
     @PostMapping("/v1/messages")
@@ -33,27 +40,29 @@ class GatewayController(
         return mono { gatewayService.chat(body, Protocol.ANTHROPIC) }
     }
 
-    @PostMapping("/v1beta/models/{model}:generateContent")
-    fun gemini(@PathVariable model: String, @RequestBody raw: JsonNode): Mono<JsonNode> = mono {
-        gatewayService.chat(withModel(raw, model), Protocol.GEMINI)
-    }
+    // Gemini protocol is intentionally disabled for now.
+    // @PostMapping("/v1beta/models/{model}:generateContent")
+    // fun gemini(@PathVariable model: String, @RequestBody body: JsonNode): Mono<JsonNode> = mono {
+    //     gatewayService.chat(withModel(body, model), Protocol.GEMINI)
+    // }
 
-    @PostMapping("/v1beta/models/{model}:streamGenerateContent")
-    fun geminiStream(@PathVariable model: String, @RequestBody raw: JsonNode): Flux<ServerSentEvent<String>> {
-        val body = withModel(raw, model)
-        if (body is ObjectNode) body.put("stream", true)
-        return gatewayService.chatStream(body, Protocol.GEMINI)
-    }
-
-    private fun withModel(raw: JsonNode, model: String): JsonNode {
-        val body = raw.deepCopy<JsonNode>()
-        if (body is ObjectNode) body.put("model", model)
-        return body
-    }
+    // @PostMapping("/v1beta/models/{model}:streamGenerateContent")
+    // fun geminiStream(@PathVariable model: String, @RequestBody body: JsonNode): Flux<ServerSentEvent<String>> {
+    //     return gatewayService.chatStream(withModel(body, model), Protocol.GEMINI)
+    // }
 
     @GetMapping("/v1/models")
     suspend fun openAiModels(): ModelListResponse = modelService.remoteModels(Protocol.OPENAI)
 
-    @GetMapping("/v1beta/models")
-    suspend fun geminiModels(): ModelListResponse = modelService.remoteModels(Protocol.GEMINI)
+    @GetMapping("/v1/openai/responses/models")
+    suspend fun openAiResponsesModels(): ModelListResponse = modelService.remoteModels(Protocol.OPENAI_RESPONSES)
+
+    // @GetMapping("/v1beta/models")
+    // suspend fun geminiModels(): ModelListResponse = modelService.remoteModels(Protocol.GEMINI)
+
+    // private fun withModel(raw: JsonNode, model: String): JsonNode {
+    //     val body = raw.deepCopy<JsonNode>()
+    //     if (body is ObjectNode) body.put("model", model)
+    //     return body
+    // }
 }

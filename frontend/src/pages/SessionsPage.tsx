@@ -3,7 +3,7 @@ import { api } from '../api/api'
 import type { Protocol, SessionResponse } from '../types'
 import { Alert, Badge, Button, Card, CardHeader, EmptyState, Field, inputClass } from '../components/ui'
 
-const protocols: Protocol[] = ['OPENAI', 'ANTHROPIC', 'GEMINI']
+const protocols: Protocol[] = ['OPENAI', 'OPENAI_RESPONSES', 'ANTHROPIC']
 
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<SessionResponse[]>([])

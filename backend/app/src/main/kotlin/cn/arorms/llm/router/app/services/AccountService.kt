@@ -27,8 +27,9 @@ class AccountService(
     fun create(request: ProviderAccountRequest): ProviderAccountResponse = repository.save(
         ProviderAccount(
             name = request.name,
-            protocol = request.protocol,
-            baseUrl = request.baseUrl.trimEnd('/'),
+            defaultProtocol = request.protocolEndpoints.keys.first(),
+            baseUrl = request.protocolEndpoints.values.first().trimEnd('/'),
+            protocolEndpoints = request.protocolEndpoints.mapKeys { (protocol, _) -> protocol.name }.mapValues { (_, url) -> url.trimEnd('/') },
             apiKey = request.apiKey,
             enabled = request.enabled,
             priority = request.priority,
@@ -43,8 +44,11 @@ class AccountService(
     fun update(id: Long, patch: ProviderAccountPatch): ProviderAccountResponse {
         val account = repository.findById(id).orElseThrow()
         patch.name?.let { account.name = it }
-        patch.protocol?.let { account.protocol = it }
-        patch.baseUrl?.let { account.baseUrl = it.trimEnd('/') }
+        patch.protocolEndpoints?.takeIf { it.isNotEmpty() }?.let { endpoints ->
+            account.protocolEndpoints = endpoints.mapKeys { (protocol, _) -> protocol.name }.mapValues { (_, url) -> url.trimEnd('/') }
+            account.defaultProtocol = endpoints.keys.first()
+            account.baseUrl = endpoints.values.first().trimEnd('/')
+        }
         patch.apiKey?.takeIf { it.isNotBlank() }?.let { account.apiKey = it }
         patch.enabled?.let { account.enabled = it }
         patch.priority?.let { account.priority = it }
@@ -65,7 +69,7 @@ class AccountService(
     fun list(provider: String?, enabled: Boolean? = null): List<ProviderAccountResponse> {
         val all = repository.findAll().sortedBy { it.priority }
         return all.asSequence()
-            .filter { provider == null || it.protocol.name.equals(provider, true) }
+            .filter { provider == null || Protocol.entries.any { protocol -> protocol.name.equals(provider, true) && it.supports(protocol) } }
             .filter { enabled == null || it.enabled == enabled }
             .map(ProviderAccountMapper::toResponse)
             .toList()
@@ -73,7 +77,7 @@ class AccountService(
 
     @Transactional
     fun selectedAccounts(protocol: Protocol): List<ProviderAccount> =
-        repository.findByEnabledTrueOrderByPriorityAscIdAsc().filter { it.protocol == protocol }
+        repository.findByEnabledTrueOrderByPriorityAscIdAsc().filter { it.supports(protocol) }
 
     suspend fun refreshBalance(id: Long): AccountBalanceResponse = withContext(Dispatchers.IO) {
         val account = repository.findById(id).orElseThrow()

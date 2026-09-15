@@ -38,8 +38,10 @@ class GatewayService(
         val request = Adapters.parseRequest(body, inboundProtocol)
         if (request.stream) throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Streaming is not enabled in the initial router release")
         val account = selectAccount(inboundProtocol)
+        val upstreamBaseUrl = account.endpointFor(inboundProtocol)
+            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No ${inboundProtocol.name} endpoint for ${account.name}")
         val outboundModel = account.modelMapping[request.model] ?: request.model
-        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = outboundModel), account.protocol)
+        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = outboundModel), inboundProtocol)
         val fingerprint = CacheService.fingerprint(inboundProtocol.name, request.model, request.thinkingEffort.name, outboundRequest.toString())
 
         val startedAt = System.nanoTime()
@@ -47,14 +49,14 @@ class GatewayService(
         val response = if (cache != null) {
             mapper.readTree(cache)
         } else {
-            val url = upstreamUrl(account, outboundModel)
+            val url = upstreamUrl(inboundProtocol, upstreamBaseUrl, outboundModel)
             val payload = mapper.writeValueAsString(outboundRequest)
-            val raw = httpClient.postJson(url, headers(account), payload)
+            val raw = httpClient.postJson(url, headers(inboundProtocol, account.apiKey), payload)
             val parsed = mapper.readTree(raw)
-            val canonical = Adapters.parseResponse(parsed, request.copy(model = outboundModel), account.protocol.name, account.name)
+            val canonical = Adapters.parseResponse(parsed, request.copy(model = outboundModel), inboundProtocol.name, account.name)
             cacheService.put(fingerprint, mapper.writeValueAsString(Adapters.toInboundResponse(canonical, inboundProtocol)), request.sessionId, inboundProtocol, request.model)
             Adapters.toInboundResponse(canonical, inboundProtocol).also {
-                usageRecorder.record(request.sessionId, account, request.model, canonical, startedAt, "success")
+                usageRecorder.record(request.sessionId, account, request.model, inboundProtocol, canonical, startedAt, "success")
                 usageRecorder.updateSession(request.sessionId, canonical)
             }
         }
@@ -65,20 +67,22 @@ class GatewayService(
     fun chatStream(body: JsonNode, inboundProtocol: Protocol): Flux<ServerSentEvent<String>> = flux(Dispatchers.IO) {
         val request = Adapters.parseRequest(body, inboundProtocol).copy(stream = true)
         val account = selectAccount(inboundProtocol)
+        val upstreamBaseUrl = account.endpointFor(inboundProtocol)
+            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No ${inboundProtocol.name} endpoint for ${account.name}")
         val outboundModel = account.modelMapping[request.model] ?: request.model
-        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = outboundModel), account.protocol)
+        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = outboundModel), inboundProtocol)
         val startedAt = System.nanoTime()
         val state = InboundStreamState(requestedModel = request.model)
         val chunks = mutableListOf<ChatStreamChunk>()
-        val passthrough = request.stream && inboundProtocol == account.protocol
+        val passthrough = request.stream
 
         try {
             streamingClient
-                .stream(streamingUrl(account, outboundModel), headers(account), mapper.writeValueAsString(outboundRequest))
+                .stream(streamingUrl(inboundProtocol, upstreamBaseUrl, outboundModel), headers(inboundProtocol, account.apiKey), mapper.writeValueAsString(outboundRequest))
                 .asFlow()
                 .collect { event: ServerSentEvent<String> ->
                     val upstreamData = event.data()
-                    val chunk = StreamAdapters.parseUpstreamEvent(upstreamData, account.protocol)
+                    val chunk = StreamAdapters.parseUpstreamEvent(upstreamData, inboundProtocol)
                     chunk?.let(chunks::add)
 
                     val frames: List<SseFrame> = if (passthrough) {
@@ -113,23 +117,24 @@ class GatewayService(
                 model = chunks.firstOrNull { it.model.isNotBlank() }?.model ?: request.model,
                 choices = emptyList(),
                 usage = usage,
-                provider = account.protocol.name,
+                provider = inboundProtocol.name,
                 accountName = account.name,
                 createdAt = startedAt / 1_000_000_000
             )
-            usageRecorder.record(request.sessionId, account, request.model, response, startedAt, "success")
+            usageRecorder.record(request.sessionId, account, request.model, inboundProtocol, response, startedAt, "success")
             usageRecorder.updateSession(request.sessionId, response)
         } catch (cause: Throwable) {
             usageRecorder.record(
                 sessionId = request.sessionId,
                 account = account,
                 requestedModel = request.model,
+                protocol = inboundProtocol,
                 response = ChatResponse(
                     id = state.fallbackId(),
                     model = request.model,
                     choices = emptyList(),
                     usage = null,
-                    provider = account.protocol.name,
+                    provider = inboundProtocol.name,
                     accountName = account.name,
                     createdAt = System.nanoTime() / 1_000_000_000
                 ),
@@ -141,7 +146,7 @@ class GatewayService(
     }
 
     private fun selectAccount(protocol: Protocol): ProviderAccount {
-        val accounts = accountRepository.findByEnabledTrueOrderByPriorityAscIdAsc().filter { it.protocol == protocol }
+        val accounts = accountRepository.findByEnabledTrueOrderByPriorityAscIdAsc().filter { it.supports(protocol) }
         if (accounts.isEmpty()) throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No enabled ${protocol.name} account")
         val lowestPriority = accounts.minOf { it.priority }
         val candidates = accounts.filter { it.priority == lowestPriority }
@@ -155,21 +160,20 @@ class GatewayService(
         return candidates.first()
     }
 
-    private fun upstreamUrl(account: ProviderAccount, model: String): String = when (account.protocol) {
-        Protocol.OPENAI -> "${account.baseUrl}/v1/chat/completions"
-        Protocol.ANTHROPIC -> "${account.baseUrl}/v1/messages"
-        Protocol.GEMINI -> "${account.baseUrl}/v1beta/models/$model:generateContent"
+    private fun upstreamUrl(protocol: Protocol, baseUrl: String, model: String): String = when (protocol) {
+        Protocol.OPENAI -> "$baseUrl/v1/chat/completions"
+        Protocol.OPENAI_RESPONSES -> "$baseUrl/v1/responses"
+        Protocol.ANTHROPIC -> "$baseUrl/v1/messages"
     }
 
-    private fun streamingUrl(account: ProviderAccount, model: String): String = when (account.protocol) {
-        Protocol.OPENAI -> "${account.baseUrl}/v1/chat/completions"
-        Protocol.ANTHROPIC -> "${account.baseUrl}/v1/messages"
-        Protocol.GEMINI -> "${account.baseUrl}/v1beta/models/$model:streamGenerateContent?alt=sse"
+    private fun streamingUrl(protocol: Protocol, baseUrl: String, model: String): String = when (protocol) {
+        Protocol.OPENAI -> "$baseUrl/v1/chat/completions"
+        Protocol.OPENAI_RESPONSES -> "$baseUrl/v1/responses"
+        Protocol.ANTHROPIC -> "$baseUrl/v1/messages"
     }
 
-    private fun headers(account: ProviderAccount): Map<String, String> = when (account.protocol) {
-        Protocol.OPENAI -> mapOf("Authorization" to "Bearer ${account.apiKey}")
-        Protocol.ANTHROPIC -> mapOf("x-api-key" to account.apiKey, "anthropic-version" to "2023-06-01")
-        Protocol.GEMINI -> mapOf("x-goog-api-key" to account.apiKey)
+    private fun headers(protocol: Protocol, apiKey: String): Map<String, String> = when (protocol) {
+        Protocol.OPENAI, Protocol.OPENAI_RESPONSES -> mapOf("Authorization" to "Bearer $apiKey")
+        Protocol.ANTHROPIC -> mapOf("x-api-key" to apiKey, "anthropic-version" to "2023-06-01")
     }
 }

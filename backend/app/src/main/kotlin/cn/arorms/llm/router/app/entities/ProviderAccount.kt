@@ -13,7 +13,8 @@ import org.hibernate.type.SqlTypes
 import java.time.OffsetDateTime
 
 /**
- * Upstream provider account and routing weight configuration.
+ * One upstream provider account. Multiple API protocols can share one account
+ * and each protocol may have its own base URL.
  */
 @Entity
 @Table(
@@ -25,14 +26,18 @@ class ProviderAccount(
     var name: String,
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false, length = 24)
-    var protocol: Protocol,
+    @Column(name = "protocol", nullable = false, length = 32)
+    var defaultProtocol: Protocol,
 
     @Column(nullable = false, length = 500)
     var baseUrl: String,
 
     @Column(nullable = false, length = 2000)
     var apiKey: String,
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "protocol_endpoints", nullable = false, columnDefinition = "jsonb")
+    var protocolEndpoints: Map<String, String> = emptyMap(),
 
     @Column(nullable = false)
     var enabled: Boolean = true,
@@ -64,4 +69,12 @@ class ProviderAccount(
 
     @Column(name = "balance_checked_at")
     var balanceCheckedAt: OffsetDateTime? = null
-) : BaseEntity()
+) : BaseEntity() {
+    fun supports(protocol: Protocol): Boolean =
+        protocolEndpoints.containsKey(protocol.name) ||
+            (protocolEndpoints.isEmpty() && protocol == defaultProtocol)
+
+    fun endpointFor(protocol: Protocol): String? =
+        protocolEndpoints[protocol.name]
+            ?: baseUrl.takeIf { protocolEndpoints.isEmpty() && protocol == defaultProtocol }
+}

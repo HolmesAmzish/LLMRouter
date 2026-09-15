@@ -2,17 +2,16 @@ package cn.arorms.llm.router.app.mappers
 
 import cn.arorms.llm.router.app.entities.ProviderAccount
 import cn.arorms.llm.router.common.enums.AccountStatus
+import cn.arorms.llm.router.common.enums.Protocol
 import cn.arorms.llm.router.common.responses.ProviderAccountResponse
 
-/**
- * Converts provider account persistence objects into API responses.
- */
 object ProviderAccountMapper {
     fun toResponse(account: ProviderAccount): ProviderAccountResponse = ProviderAccountResponse(
         id = account.id ?: 0L,
         name = account.name,
-        protocol = account.protocol,
-        baseUrl = account.baseUrl,
+        protocolEndpoints = account.protocolEndpoints.mapNotNull { (name, url) ->
+            runCatching { Protocol.valueOf(name) }.getOrNull()?.let { it to url }
+        }.toMap().ifEmpty { mapOf(account.defaultProtocol to account.baseUrl) },
         enabled = account.enabled,
         priority = account.priority,
         weight = account.weight,

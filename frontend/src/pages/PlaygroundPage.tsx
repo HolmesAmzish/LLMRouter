@@ -3,7 +3,7 @@ import { getAccessToken } from '../api/auth'
 import type { Protocol, ThinkingEffort } from '../types'
 import { Alert, Button, Card, CardHeader, Field, inputClass } from '../components/ui'
 
-const protocols: Protocol[] = ['OPENAI', 'ANTHROPIC', 'GEMINI']
+const protocols: Protocol[] = ['OPENAI', 'OPENAI_RESPONSES', 'ANTHROPIC']
 const efforts: ThinkingEffort[] = ['NONE', 'LOW', 'MEDIUM', 'HIGH']
 
 type ChatMessageView = { role: string; content: string }
@@ -45,23 +45,22 @@ export default function PlaygroundPage() {
         ]
       }
 
-      const body: Record<string, unknown> = {
-        model,
-        messages: [{ role: 'user', content }],
-        max_tokens: 1024,
-        stream: false,
-      }
+      const isResponses = protocol === 'OPENAI_RESPONSES'
+      const body: Record<string, unknown> = isResponses
+        ? { model, input: content, max_output_tokens: 1024, stream: false }
+        : { model, messages: [{ role: 'user', content }], max_tokens: 1024, stream: false }
       if (sessionId) { body.metadata = { session_id: sessionId } }
-      if (thinkingEffort !== 'NONE') { body.reasoning_effort = thinkingEffort.toLowerCase() }
+      if (thinkingEffort !== 'NONE') {
+        if (isResponses) body.reasoning = { effort: thinkingEffort.toLowerCase() }
+        else body.reasoning_effort = thinkingEffort.toLowerCase()
+      }
       if (toolJson.trim()) { body.tools = JSON.parse(toolJson) }
 
       const path = protocol === 'OPENAI'
         ? '/v1/chat/completions'
-        : protocol === 'ANTHROPIC'
-          ? '/v1/messages'
-          : stream
-            ? `/v1beta/models/${model}:streamGenerateContent?alt=sse`
-            : `/v1beta/models/${model}:generateContent`
+        : protocol === 'OPENAI_RESPONSES'
+          ? '/v1/responses'
+          : '/v1/messages' 
       const accessToken = await getAccessToken()
       const response = await fetch(path, {
         method: 'POST',
@@ -98,10 +97,10 @@ export default function PlaygroundPage() {
           const parsed = JSON.parse(payload)
           if (protocol === 'OPENAI') {
             appendDelta(parsed.choices?.[0]?.delta?.content ?? '')
+          } else if (protocol === 'OPENAI_RESPONSES') {
+            if (parsed.type === 'response.output_text.delta') appendDelta(parsed.delta ?? '')
           } else if (protocol === 'ANTHROPIC') {
             if (parsed.type === 'content_block_delta') appendDelta(parsed.delta?.text ?? '')
-          } else {
-            appendDelta(parsed.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? '').join('') ?? '')
           }
         }
 
@@ -124,9 +123,11 @@ export default function PlaygroundPage() {
         const payload = await response.json()
         const text = protocol === 'OPENAI'
           ? payload.choices?.[0]?.message?.content ?? ''
-          : protocol === 'ANTHROPIC'
-            ? payload.content?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
-            : payload.candidates?.[0]?.content?.parts?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
+          : protocol === 'OPENAI_RESPONSES'
+            ? payload.output?.flatMap((item: { content?: Array<{ type?: string; text?: string }> }) => item.content ?? [])
+                .filter((part: { type?: string }) => part.type === 'output_text')
+                .map((part: { text?: string }) => part.text ?? '').join('') ?? ''
+            : payload.content?.map((part: { text?: string }) => part.text ?? '').join('') ?? ''
         setMessages((current) => [...current, { role: 'assistant', content: text }])
       }
       setImage(null)

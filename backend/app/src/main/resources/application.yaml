@@ -29,7 +29,7 @@ application:
   security:
     enabled: ${SECURITY_ENABLED:false}
     jwt:
-      audience: ${KEYCLOAK_AUDIENCE:llm-router}
+      audience: ${KEYCLOAK_AUDIENCE:llmrouter-backend}
     api-key: ${ROUTER_API_KEY:}
   cache:
     enabled: ${ROUTER_CACHE_ENABLED:true}

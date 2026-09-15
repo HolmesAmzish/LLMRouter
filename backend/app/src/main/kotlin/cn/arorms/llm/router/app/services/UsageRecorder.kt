@@ -5,6 +5,7 @@ import cn.arorms.llm.router.app.entities.Session
 import cn.arorms.llm.router.app.entities.UsageRecord
 import cn.arorms.llm.router.app.repositories.SessionRepository
 import cn.arorms.llm.router.app.repositories.UsageRecordRepository
+import cn.arorms.llm.router.common.enums.Protocol
 import cn.arorms.llm.router.common.responses.ChatResponse
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -15,14 +16,22 @@ class UsageRecorder(
     private val sessionRepository: SessionRepository
 ) {
     @Transactional
-    fun record(sessionId: String?, account: ProviderAccount, requestedModel: String, response: ChatResponse, startedAt: Long, status: String) {
+    fun record(
+        sessionId: String?,
+        account: ProviderAccount,
+        requestedModel: String,
+        protocol: Protocol,
+        response: ChatResponse,
+        startedAt: Long,
+        status: String
+    ) {
         usageRepository.save(
             UsageRecord(
                 sessionId = sessionId,
-                provider = account.protocol.name,
+                provider = protocol.name,
                 accountName = account.name,
                 model = requestedModel,
-                protocol = account.protocol,
+                protocol = protocol,
                 inputTokens = response.usage?.inputTokens ?: 0,
                 outputTokens = response.usage?.outputTokens ?: 0,
                 totalTokens = response.usage?.totalTokens ?: 0,

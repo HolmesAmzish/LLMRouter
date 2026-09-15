@@ -22,20 +22,22 @@ object Adapters {
 
     fun parseRequest(body: JsonNode, protocol: Protocol): ChatRequest = when (protocol) {
         Protocol.OPENAI -> parseOpenAiRequest(body)
+        Protocol.OPENAI_RESPONSES -> parseOpenAiResponsesRequest(body)
         Protocol.ANTHROPIC -> parseAnthropicRequest(body)
-        Protocol.GEMINI -> parseGeminiRequest(body)
+        // Protocol.GEMINI -> parseGeminiRequest(body)
     }
 
     fun toOutboundRequest(request: ChatRequest, protocol: Protocol): JsonNode = when (protocol) {
         Protocol.OPENAI -> openAiRequest(request)
+        Protocol.OPENAI_RESPONSES -> openAiResponsesRequest(request)
         Protocol.ANTHROPIC -> anthropicRequest(request)
-        Protocol.GEMINI -> geminiRequest(request)
+        // Protocol.GEMINI -> geminiRequest(request)
     }
 
     fun parseResponse(body: JsonNode, request: ChatRequest, provider: String, accountName: String?): ChatResponse {
         val usage = when (provider.uppercase()) {
             "ANTHROPIC" -> parseAnthropicUsage(body)
-            "GEMINI" -> parseGeminiUsage(body)
+            "OPENAI_RESPONSES" -> parseOpenAiResponsesUsage(body)
             else -> parseOpenAiUsage(body)
         }
         return ChatResponse(
@@ -43,7 +45,7 @@ object Adapters {
             model = body.path("model").asText(body.path("modelVersion").asText(request.model)),
             choices = when (provider.uppercase()) {
                 "ANTHROPIC" -> listOf(parseAnthropicChoice(body))
-                "GEMINI" -> parseGeminiChoices(body)
+                "OPENAI_RESPONSES" -> listOf(parseOpenAiResponsesChoice(body))
                 else -> parseOpenAiChoices(body)
             },
             usage = usage,
@@ -55,8 +57,9 @@ object Adapters {
 
     fun toInboundResponse(response: ChatResponse, protocol: Protocol): JsonNode = when (protocol) {
         Protocol.OPENAI -> openAiResponse(response)
+        Protocol.OPENAI_RESPONSES -> openAiResponsesResponse(response)
         Protocol.ANTHROPIC -> anthropicResponse(response)
-        Protocol.GEMINI -> geminiResponse(response)
+        // Protocol.GEMINI -> geminiResponse(response)
     }
 
     private fun parseOpenAiRequest(body: JsonNode): ChatRequest = ChatRequest(
@@ -98,6 +101,49 @@ object Adapters {
         stream = body.path("stream").asBoolean(false),
         extra = body.path("metadata").let { if (it.isObject) mapper.convertValue(it, Map::class.java) as Map<String, Any?> else emptyMap() }
     )
+
+    private fun parseOpenAiResponsesRequest(body: JsonNode): ChatRequest {
+        val messages = mutableListOf<ChatMessage>()
+        body.path("instructions").asText(null)?.takeIf { it.isNotBlank() }?.let {
+            messages += ChatMessage("system", listOf(ChatPart(PartType.TEXT, text = it)))
+        }
+        when (val input = body.path("input")) {
+            is ArrayNode -> input.forEach { item ->
+                val role = item.path("role").asText("user")
+                val parts = when (val content = item.path("content")) {
+                    is ArrayNode -> content.map { part ->
+                        when (part.path("type").asText()) {
+                            "output_text", "text" -> ChatPart(PartType.TEXT, text = part.path("text").asText())
+                            "input_image" -> ChatPart(PartType.IMAGE_URL, imageUrl = part.path("image_url").asText(null))
+                            else -> ChatPart(PartType.TEXT, text = part.path("text").asText())
+                        }
+                    }
+                    else -> listOf(ChatPart(PartType.TEXT, text = content.asText("")))
+                }
+                messages += ChatMessage(role, parts)
+            }
+            else -> messages += ChatMessage("user", listOf(ChatPart(PartType.TEXT, text = input.asText(""))))
+        }
+        return ChatRequest(
+            model = body.path("model").asText(),
+            messages = messages,
+            maxTokens = body.path("max_output_tokens").asInt(0).takeIf { it > 0 },
+            temperature = body.path("temperature").asDouble(1.0).takeIf { body.has("temperature") },
+            topP = body.path("top_p").asDouble(1.0).takeIf { body.has("top_p") },
+            tools = body.path("tools").map { tool ->
+                ToolDefinition(
+                    name = tool.path("name").asText(),
+                    description = tool.path("description").asText(null),
+                    schema = if (tool.path("parameters").isObject) mapper.convertValue(tool.path("parameters"), Map::class.java) as Map<String, Any?> else null
+                )
+            },
+            thinkingEffort = body.path("reasoning").path("effort").asText("none").uppercase().let {
+                runCatching { ThinkingEffort.valueOf(it) }.getOrDefault(ThinkingEffort.NONE)
+            },
+            sessionId = body.path("metadata").path("session_id").asText(null),
+            stream = body.path("stream").asBoolean(false)
+        )
+    }
 
     private fun parseAnthropicRequest(body: JsonNode): ChatRequest {
         val messages = mutableListOf<ChatMessage>()
@@ -223,6 +269,53 @@ object Adapters {
                 function.put("name", tool.name)
                 tool.description?.let { function.put("description", it) }
                 function.set<JsonNode>("parameters", if (tool.schema == null) mapper.createObjectNode().put("type", "object") as JsonNode else mapper.valueToTree(tool.schema))
+            }
+        }
+        return body
+    }
+
+    private fun openAiResponsesRequest(request: ChatRequest): JsonNode {
+        val body = mapper.createObjectNode()
+        body.put("model", request.model)
+        val instructions = request.messages.filter { it.role == "system" }
+            .flatMap { it.parts }
+            .joinToString("\n") { it.text ?: "" }
+        if (instructions.isNotBlank()) body.put("instructions", instructions)
+        val input = body.putArray("input")
+        request.messages.filter { it.role != "system" }.forEach { message ->
+            val item = input.addObject()
+            item.put("type", "message")
+            item.put("role", message.role)
+            val content = item.putArray("content")
+            message.parts.forEach { part ->
+                when (part.type) {
+                    PartType.TEXT -> content.addObject().put("type", if (message.role == "assistant") "output_text" else "input_text").put("text", part.text ?: "")
+                    PartType.IMAGE_URL -> content.addObject().put("type", "input_image").put("image_url", part.imageUrl ?: "")
+                    PartType.IMAGE_DATA -> content.addObject().put("type", "input_image").put("image_url", "data:${part.mimeType};base64,${part.data}")
+                    PartType.TOOL_RESULT -> content.addObject().put("type", "input_text").put("text", part.text ?: "")
+                }
+            }
+        }
+        request.maxTokens?.let { body.put("max_output_tokens", it) }
+        request.temperature?.let { body.put("temperature", it) }
+        request.topP?.let { body.put("top_p", it) }
+        if (request.thinkingEffort != ThinkingEffort.NONE) {
+            val effort = when (request.thinkingEffort) {
+                ThinkingEffort.MINIMAL -> "minimal"
+                ThinkingEffort.LOW -> "low"
+                ThinkingEffort.MEDIUM -> "medium"
+                else -> "high"
+            }
+            body.putObject("reasoning").put("effort", effort)
+        }
+        if (request.tools.isNotEmpty()) {
+            val tools = body.putArray("tools")
+            request.tools.forEach { tool ->
+                val item = tools.addObject().put("type", "function")
+                item.put("name", tool.name)
+                tool.description?.let { item.put("description", it) }
+                val parameters: JsonNode = if (tool.schema == null) mapper.createObjectNode().put("type", "object") else mapper.valueToTree(tool.schema)
+                item.set<JsonNode>("parameters", parameters)
             }
         }
         return body
@@ -354,6 +447,29 @@ object Adapters {
         return Usage(usage.path("prompt_tokens").asLong(0), usage.path("completion_tokens").asLong(0))
     }
 
+    private fun parseOpenAiResponsesChoice(body: JsonNode): ChatChoice {
+        val parts = body.path("output").filter { it.path("type").asText() == "message" }
+            .flatMap { item -> item.path("content").map { part ->
+                when (part.path("type").asText()) {
+                    "output_text" -> ChatPart(PartType.TEXT, text = part.path("text").asText())
+                    "function_call" -> ChatPart(
+                        PartType.TEXT,
+                        text = part.path("arguments").asText("{}"),
+                        toolCallId = part.path("call_id").asText(null),
+                        name = part.path("name").asText(null)
+                    )
+                    else -> ChatPart(PartType.TEXT, text = part.path("text").asText(""))
+                }
+            } }
+        return ChatChoice(0, ChatMessage("assistant", parts), body.path("status").asText("completed"))
+    }
+
+    private fun parseOpenAiResponsesUsage(body: JsonNode): Usage? {
+        val usage = body.path("usage")
+        if (!usage.isObject) return null
+        return Usage(usage.path("input_tokens").asLong(0), usage.path("output_tokens").asLong(0))
+    }
+
     private fun parseAnthropicUsage(body: JsonNode): Usage? {
         val usage = body.path("usage")
         if (!usage.isObject) return null
@@ -385,6 +501,41 @@ object Adapters {
         response.usage?.let { usage ->
             val usageNode = body.putObject("usage")
             usageNode.put("prompt_tokens", usage.inputTokens); usageNode.put("completion_tokens", usage.outputTokens); usageNode.put("total_tokens", usage.totalTokens)
+        }
+        return body
+    }
+
+    private fun openAiResponsesResponse(response: ChatResponse): JsonNode {
+        val body = mapper.createObjectNode()
+        body.put("id", response.id)
+        body.put("object", "response")
+        body.put("created_at", response.createdAt)
+        body.put("model", response.model)
+        body.put("status", response.choices.firstOrNull()?.finishReason ?: "completed")
+        val output = body.putArray("output")
+        response.choices.firstOrNull()?.message?.parts?.forEach { part ->
+            if (part.name != null) {
+                val call = output.addObject().put("type", "function_call")
+                call.put("call_id", part.toolCallId ?: UUID.randomUUID().toString())
+                call.put("name", part.name ?: "")
+                call.put("arguments", part.text ?: "{}")
+            } else if (!part.text.isNullOrBlank()) {
+                output.addObject()
+                    .put("type", "message")
+                    .put("id", "msg-${response.id}")
+                    .put("role", "assistant")
+                    .put("status", "completed")
+                    .putArray("content")
+                    .addObject()
+                    .put("type", "output_text")
+                    .put("text", part.text)
+            }
+        }
+        response.usage?.let { usage ->
+            body.putObject("usage")
+                .put("input_tokens", usage.inputTokens)
+                .put("output_tokens", usage.outputTokens)
+                .put("total_tokens", usage.totalTokens)
         }
         return body
     }
