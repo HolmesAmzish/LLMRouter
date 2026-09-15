@@ -1,0 +1,77 @@
+package cn.arorms.llm.router.app.services
+
+import cn.arorms.llm.router.app.entities.ApiKey
+import cn.arorms.llm.router.app.repositories.ApiKeyRepository
+import cn.arorms.llm.router.common.requests.ApiKeyRequest
+import cn.arorms.llm.router.common.responses.ApiKeyResponse
+import org.springframework.stereotype.Service
+import org.springframework.transaction.annotation.Transactional
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.security.SecureRandom
+import java.time.OffsetDateTime
+import java.util.Base64
+
+@Service
+class ApiKeyService(private val repository: ApiKeyRepository) {
+    private val secureRandom = SecureRandom()
+
+    @Transactional
+    fun create(request: ApiKeyRequest): ApiKeyResponse {
+        val rawKey = generateKey()
+        val entity = ApiKey(
+            name = request.name,
+            keyHash = hash(rawKey),
+            prefix = rawKey.take(16),
+            enabled = true,
+            expiresAt = request.expiresAt
+        )
+        val saved = repository.save(entity)
+        return toResponse(saved, rawKey)
+    }
+
+    @Transactional
+    fun list(): List<ApiKeyResponse> = repository.findAllByOrderByIdDesc().map { toResponse(it) }
+
+    @Transactional
+    fun revoke(id: Long): ApiKeyResponse {
+        val key = repository.findById(id).orElseThrow()
+        key.enabled = false
+        return toResponse(key)
+    }
+
+    @Transactional
+    fun delete(id: Long) = repository.deleteById(id)
+
+    @Transactional
+    fun authenticate(rawKey: String): ApiKey? {
+        val key = repository.findByKeyHash(hash(rawKey)) ?: return null
+        if (!key.enabled || key.expiresAt?.isBefore(OffsetDateTime.now()) == true) return null
+        key.lastUsedAt = OffsetDateTime.now()
+        return key
+    }
+
+    private fun generateKey(): String {
+        val bytes = ByteArray(32)
+        secureRandom.nextBytes(bytes)
+        return "sk-router-" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    }
+
+    private fun hash(rawKey: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(rawKey.toByteArray(StandardCharsets.UTF_8))
+        return digest.joinToString("") { "%02x".format(it) }
+    }
+
+    private fun toResponse(key: ApiKey, rawKey: String? = null) = ApiKeyResponse(
+        id = key.id ?: 0L,
+        name = key.name,
+        prefix = key.prefix,
+        apiKey = rawKey,
+        enabled = key.enabled,
+        expiresAt = key.expiresAt,
+        lastUsedAt = key.lastUsedAt,
+        createdAt = key.createdAt?.toString(),
+        updatedAt = key.updatedAt?.toString()
+    )
+}

@@ -13,13 +13,14 @@ type Draft = {
   priority: number
   weight: number
   balanceEndpoint: string
+  modelsEndpoint: string
 }
 
 const emptyDraft: Draft = {
   name: '',
   protocolEndpoints: {
-    OPENAI: 'https://api.openai.com',
-    OPENAI_RESPONSES: 'https://api.openai.com',
+    OPENAI: '',
+    OPENAI_RESPONSES: '',
     ANTHROPIC: '',
   },
   apiKey: '',
@@ -27,11 +28,19 @@ const emptyDraft: Draft = {
   priority: 100,
   weight: 100,
   balanceEndpoint: '',
+  modelsEndpoint: '',
+}
+
+const placeholders: Record<Protocol, string> = {
+  OPENAI: 'https://api.openai.com/v1/chat/completions',
+  OPENAI_RESPONSES: 'https://api.openai.com/v1/responses',
+  ANTHROPIC: 'https://api.anthropic.com/v1/messages',
 }
 
 export default function AccountsPage({ onChanged }: { onChanged?: () => void }) {
   const [accounts, setAccounts] = useState<ProviderAccount[]>([])
   const [draft, setDraft] = useState<Draft>(emptyDraft)
+  const [editingId, setEditingId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -41,18 +50,71 @@ export default function AccountsPage({ onChanged }: { onChanged?: () => void }) 
 
   useEffect(() => { void load() }, [load])
 
+  const resetForm = () => {
+    setDraft(emptyDraft)
+    setEditingId(null)
+  }
+
+  const startEdit = (account: ProviderAccount) => {
+    setError('')
+    setEditingId(account.id)
+    setDraft({
+      name: account.name,
+      protocolEndpoints: {
+        OPENAI: account.protocolEndpoints.OPENAI ?? '',
+        OPENAI_RESPONSES: account.protocolEndpoints.OPENAI_RESPONSES ?? '',
+        ANTHROPIC: account.protocolEndpoints.ANTHROPIC ?? '',
+      },
+      apiKey: '',
+      enabled: account.enabled,
+      priority: account.priority,
+      weight: account.weight,
+      balanceEndpoint: account.balanceEndpoint ?? '',
+      modelsEndpoint: account.configuration.modelsEndpoint ?? '',
+    })
+  }
+
   const submit = async () => {
     setBusy(true); setError('')
     try {
       const protocolEndpoints = Object.fromEntries(
-        Object.entries(draft.protocolEndpoints).filter(([, url]) => url.trim())
+        Object.entries(draft.protocolEndpoints)
+          .map(([protocol, url]) => [protocol, url.trim()])
+          .filter(([, url]) => url)
       )
-      if (Object.keys(protocolEndpoints).length === 0) throw new Error('Configure at least one protocol endpoint')
-      await api.post<ProviderAccount>('/api/v1/accounts', { ...draft, protocolEndpoints })
-      setDraft({ ...emptyDraft, name: '', apiKey: '' })
+      if (Object.keys(protocolEndpoints).length === 0) {
+        throw new Error('Configure at least one protocol endpoint')
+      }
+
+      const existing = editingId == null ? null : accounts.find((account) => account.id === editingId)
+      const configuration = { ...(existing?.configuration ?? {}) }
+      if (draft.modelsEndpoint.trim()) configuration.modelsEndpoint = draft.modelsEndpoint.trim()
+      else delete configuration.modelsEndpoint
+
+      const payload: Record<string, unknown> = {
+        name: draft.name.trim(),
+        protocolEndpoints,
+        enabled: draft.enabled,
+        priority: draft.priority,
+        weight: draft.weight,
+        balanceEndpoint: draft.balanceEndpoint.trim(),
+        configuration,
+      }
+
+      if (editingId == null) {
+        await api.post<ProviderAccount>('/api/v1/accounts', { ...payload, apiKey: draft.apiKey })
+      } else {
+        if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim()
+        await api.patch<ProviderAccount>(`/api/v1/accounts/${editingId}`, payload)
+      }
+
+      resetForm()
       await load(); onChanged?.()
-    } catch (cause) { setError(String(cause instanceof Error ? cause.message : cause)) }
-    finally { setBusy(false) }
+    } catch (cause) {
+      setError(String(cause instanceof Error ? cause.message : cause))
+    } finally {
+      setBusy(false)
+    }
   }
 
   const mutate = async (action: () => Promise<unknown>) => {
@@ -62,12 +124,17 @@ export default function AccountsPage({ onChanged }: { onChanged?: () => void }) 
     finally { setBusy(false) }
   }
 
+  const remove = async (account: ProviderAccount) => {
+    await mutate(() => api.delete(`/api/v1/accounts/${account.id}`))
+    if (editingId === account.id) resetForm()
+  }
+
   const syncModels = (account: ProviderAccount) => mutate(() => api.post<ModelListResponse>(`/api/v1/models/accounts/${account.id}/sync`))
 
   return (
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
       <Card>
-        <CardHeader title="Provider accounts" description="One account can expose multiple protocol endpoints." action={<Button variant="secondary" onClick={() => void load()}>Refresh</Button>} />
+        <CardHeader title="Provider accounts" description="Each protocol stores one complete POST endpoint." action={<Button variant="secondary" onClick={() => void load()}>Refresh</Button>} />
         {error && <div className="p-4"><Alert>{error}</Alert></div>}
         {accounts.length === 0 ? <EmptyState title="No accounts" description="Add an upstream provider to start routing requests." /> : (
           <div className="divide-y divide-border">
@@ -94,10 +161,11 @@ export default function AccountsPage({ onChanged }: { onChanged?: () => void }) 
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
+                  <Button onClick={() => startEdit(account)}>Edit</Button>
                   <Button onClick={() => void syncModels(account)}>Sync models</Button>
                   <Button onClick={() => void mutate(() => api.post(`/api/v1/accounts/${account.id}/balance/refresh`))}>Balance</Button>
                   <Button onClick={() => void mutate(() => api.patch(`/api/v1/accounts/${account.id}`, { enabled: !account.enabled }))}>{account.enabled ? 'Disable' : 'Enable'}</Button>
-                  <Button variant="danger" onClick={() => void mutate(() => api.delete(`/api/v1/accounts/${account.id}`))}>Delete</Button>
+                  <Button variant="danger" onClick={() => void remove(account)}>Delete</Button>
                 </div>
               </article>
             ))}
@@ -106,27 +174,43 @@ export default function AccountsPage({ onChanged }: { onChanged?: () => void }) 
       </Card>
 
       <Card>
-        <CardHeader title="Add provider" description="Use one key with multiple protocol-specific URLs." />
+        <CardHeader
+          title={editingId == null ? 'Add provider' : 'Edit provider'}
+          description="Enter complete POST endpoint URLs. The gateway does not append paths."
+        />
         <form className="grid gap-3 p-4" onSubmit={(event) => { event.preventDefault(); void submit() }}>
           <Field label="Name"><input className={inputClass} required value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} /></Field>
           {protocols.map((protocol) => (
-            <Field key={protocol} label={`${protocol} base URL`}>
+            <Field key={protocol} label={`${protocol} endpoint URL`}>
               <input
                 className={inputClass}
+                required={!!draft.protocolEndpoints[protocol]}
                 value={draft.protocolEndpoints[protocol] ?? ''}
                 onChange={(e) => setDraft({ ...draft, protocolEndpoints: { ...draft.protocolEndpoints, [protocol]: e.target.value } })}
-                placeholder={protocol === 'ANTHROPIC' ? 'https://api.anthropic.com' : 'https://api.openai.com'}
+                placeholder={placeholders[protocol]}
               />
             </Field>
           ))}
-          <Field label="API key"><input className={inputClass} required type="password" value={draft.apiKey} onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })} /></Field>
+          <Field label={editingId == null ? 'API key' : 'API key (leave blank to keep)'}>
+            <input
+              className={inputClass}
+              required={editingId == null}
+              type="password"
+              value={draft.apiKey}
+              onChange={(e) => setDraft({ ...draft, apiKey: e.target.value })}
+            />
+          </Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Priority"><input className={inputClass} type="number" value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: Number(e.target.value) })} /></Field>
             <Field label="Weight"><input className={inputClass} type="number" value={draft.weight} onChange={(e) => setDraft({ ...draft, weight: Number(e.target.value) })} /></Field>
           </div>
           <Field label="Balance endpoint (optional)"><input className={inputClass} value={draft.balanceEndpoint} onChange={(e) => setDraft({ ...draft, balanceEndpoint: e.target.value })} /></Field>
+          <Field label="Model list endpoint (optional)"><input className={inputClass} value={draft.modelsEndpoint} onChange={(e) => setDraft({ ...draft, modelsEndpoint: e.target.value })} /></Field>
           <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={draft.enabled} onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })} /> Enabled</label>
-          <Button type="submit" variant="primary" disabled={busy}>Create provider</Button>
+          <div className="flex gap-2">
+            <Button type="submit" variant="primary" disabled={busy}>{editingId == null ? 'Create provider' : 'Save changes'}</Button>
+            {editingId != null && <Button onClick={resetForm}>Cancel</Button>}
+          </div>
         </form>
       </Card>
     </div>

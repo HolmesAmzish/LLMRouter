@@ -19,6 +19,7 @@ class UsageRecorder(
     fun record(
         sessionId: String?,
         account: ProviderAccount,
+        providerName: String,
         requestedModel: String,
         protocol: Protocol,
         response: ChatResponse,
@@ -28,7 +29,7 @@ class UsageRecorder(
         usageRepository.save(
             UsageRecord(
                 sessionId = sessionId,
-                provider = protocol.name,
+                provider = providerName,
                 accountName = account.name,
                 model = requestedModel,
                 protocol = protocol,

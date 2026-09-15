@@ -7,4 +7,6 @@ interface ModelCatalogRepository : JpaRepository<ModelCatalog, Long> {
     fun findByAccountId(accountId: Long): List<ModelCatalog>
     fun deleteByAccountId(accountId: Long)
     fun findByEnabledTrue(): List<ModelCatalog>
+    fun findFirstByProviderAndModelIdAndEnabledTrue(provider: String, modelId: String): ModelCatalog?
+    fun existsByAccountIdAndModelId(accountId: Long, modelId: String): Boolean
 }

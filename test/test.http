@@ -1,0 +1,11 @@
+### Get openai response
+POST {{baseUrl}}/v1/chat/completions
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "model": "volcengine/deepseek-v4-flash",
+  "messages": [{"role":"user","content":"Hello"}],
+  "max_tokens": 512,
+  "stream": true
+}

@@ -4,12 +4,17 @@ import cn.arorms.llm.router.app.services.GatewayService
 import cn.arorms.llm.router.app.services.ModelService
 import cn.arorms.llm.router.common.enums.Protocol
 import cn.arorms.llm.router.common.responses.ModelListResponse
-import com.fasterxml.jackson.databind.JsonNode
 import kotlinx.coroutines.reactor.mono
+import org.springframework.http.MediaType
+import org.springframework.http.ResponseEntity
 import org.springframework.http.codec.ServerSentEvent
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
 import org.springframework.web.bind.annotation.*
-import reactor.core.publisher.Flux
 import reactor.core.publisher.Mono
+import reactor.core.Disposable
+import reactor.core.publisher.Flux
+
+private val streamRequest = Regex("""\"stream\"\s*:\s*true""", RegexOption.IGNORE_CASE)
 
 @RestController
 class GatewayController(
@@ -17,52 +22,44 @@ class GatewayController(
     private val modelService: ModelService
 ) {
     @PostMapping("/v1/chat/completions")
-    fun openAiChat(@RequestBody body: JsonNode): Any {
-        if (body.path("stream").asBoolean(false)) {
-            return gatewayService.chatStream(body, Protocol.OPENAI)
-        }
-        return mono { gatewayService.chat(body, Protocol.OPENAI) }
+    fun openAiChat(@RequestBody body: String): Any {
+        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.OPENAI))
+        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.OPENAI)) }
     }
 
     @PostMapping("/v1/responses")
-    fun openAiResponses(@RequestBody body: JsonNode): Any {
-        if (body.path("stream").asBoolean(false)) {
-            return gatewayService.chatStream(body, Protocol.OPENAI_RESPONSES)
-        }
-        return mono { gatewayService.chat(body, Protocol.OPENAI_RESPONSES) }
+    fun openAiResponses(@RequestBody body: String): Any {
+        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.OPENAI_RESPONSES))
+        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.OPENAI_RESPONSES)) }
     }
 
     @PostMapping("/v1/messages")
-    fun anthropic(@RequestBody body: JsonNode): Any {
-        if (body.path("stream").asBoolean(false)) {
-            return gatewayService.chatStream(body, Protocol.ANTHROPIC)
-        }
-        return mono { gatewayService.chat(body, Protocol.ANTHROPIC) }
+    fun anthropic(@RequestBody body: String): Any {
+        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.ANTHROPIC))
+        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.ANTHROPIC)) }
     }
 
-    // Gemini protocol is intentionally disabled for now.
-    // @PostMapping("/v1beta/models/{model}:generateContent")
-    // fun gemini(@PathVariable model: String, @RequestBody body: JsonNode): Mono<JsonNode> = mono {
-    //     gatewayService.chat(withModel(body, model), Protocol.GEMINI)
-    // }
-
-    // @PostMapping("/v1beta/models/{model}:streamGenerateContent")
-    // fun geminiStream(@PathVariable model: String, @RequestBody body: JsonNode): Flux<ServerSentEvent<String>> {
-    //     return gatewayService.chatStream(withModel(body, model), Protocol.GEMINI)
-    // }
+    // Gemini routes are intentionally disabled for now.
 
     @GetMapping("/v1/models")
-    suspend fun openAiModels(): ModelListResponse = modelService.remoteModels(Protocol.OPENAI)
+    suspend fun openAiModels(): ModelListResponse = modelService.localModels()
 
     @GetMapping("/v1/openai/responses/models")
-    suspend fun openAiResponsesModels(): ModelListResponse = modelService.remoteModels(Protocol.OPENAI_RESPONSES)
+    suspend fun openAiResponsesModels(): ModelListResponse = modelService.localModels()
 
-    // @GetMapping("/v1beta/models")
-    // suspend fun geminiModels(): ModelListResponse = modelService.remoteModels(Protocol.GEMINI)
-
-    // private fun withModel(raw: JsonNode, model: String): JsonNode {
-    //     val body = raw.deepCopy<JsonNode>()
-    //     if (body is ObjectNode) body.put("model", model)
-    //     return body
-    // }
+    private fun sse(events: Flux<ServerSentEvent<String>>): SseEmitter {
+        val emitter = SseEmitter(0L)
+        val subscription: Disposable = events.subscribe(
+            { event ->
+                val builder = SseEmitter.event().data(event.data() ?: "")
+                event.event()?.takeIf { it.isNotBlank() }?.let(builder::name)
+                emitter.send(builder)
+            },
+            emitter::completeWithError,
+            emitter::complete
+        )
+        emitter.onCompletion { subscription.dispose() }
+        emitter.onTimeout { subscription.dispose() }
+        return emitter
+    }
 }

@@ -296,6 +296,7 @@ object StreamAdapters {
 
 class InboundStreamState(
     val requestedModel: String,
+    val requestedProtocol: cn.arorms.llm.router.common.enums.Protocol,
     initialId: String = ""
 ) {
     var id: String = initialId

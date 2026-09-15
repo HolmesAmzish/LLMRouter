@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import AccountsPage from './pages/AccountsPage'
+import ApiKeysPage from './pages/ApiKeysPage'
+import DocsPage from './pages/DocsPage'
 import ModelsPage from './pages/ModelsPage'
 import SessionsPage from './pages/SessionsPage'
 import UsagePage from './pages/UsagePage'
@@ -10,14 +12,16 @@ import { CallbackPage } from './features/login/CallbackPage'
 import { LoginPage } from './features/login/LoginPage'
 import { useAuth } from './hooks/useAuth'
 
-type Page = 'accounts' | 'models' | 'sessions' | 'usage' | 'playground'
+type Page = 'accounts' | 'models' | 'api-keys' | 'sessions' | 'usage' | 'playground' | 'docs'
 
 const navigation: { id: Page; label: string }[] = [
   { id: 'accounts', label: 'Accounts' },
   { id: 'models', label: 'Models' },
+  { id: 'api-keys', label: 'API Keys' },
   { id: 'sessions', label: 'Sessions' },
   { id: 'usage', label: 'Usage' },
   { id: 'playground', label: 'Playground' },
+  { id: 'docs', label: 'Calling Docs' },
 ]
 
 function AppShell() {
@@ -42,7 +46,7 @@ function AppShell() {
             ))}
           </nav>
           <div className="mt-auto rounded-md border border-border p-3 text-xs text-muted-foreground">
-            <p>OpenAI · Anthropic · Gemini</p>
+            <p>OpenAI Chat · OpenAI Responses · Anthropic</p>
             <p className="mt-1">Protocol conversion, caching, sessions, tools and usage tracking.</p>
           </div>
         </div>
@@ -54,7 +58,7 @@ function AppShell() {
             <select className="h-8 rounded-md border border-input bg-card px-2 text-xs lg:hidden" value={page} onChange={(event) => setPage(event.target.value as Page)}>
               {navigation.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}
             </select>
-            <h1 className="text-sm font-medium capitalize">{page}</h1>
+            <h1 className="text-sm font-medium">{page === 'api-keys' ? 'API Keys' : page === 'docs' ? 'Calling Docs' : page}</h1>
           </div>
           <div className="flex items-center gap-2">
             <button className="h-8 rounded-md border border-border px-3 text-xs" onClick={() => setRefreshKey((key) => key + 1)}>Sync UI</button>
@@ -69,10 +73,12 @@ function AppShell() {
         </header>
         <div key={refreshKey} className="p-4 lg:p-6">
           {page === 'accounts' && <AccountsPage onChanged={() => setRefreshKey((key) => key + 1)} />}
-          {page === 'models' && <ModelsPage />}
+          {page === 'models' && <ModelsPage onChanged={() => setRefreshKey((key) => key + 1)} />}
+          {page === 'api-keys' && <ApiKeysPage />}
           {page === 'sessions' && <SessionsPage />}
           {page === 'usage' && <UsagePage />}
           {page === 'playground' && <PlaygroundPage />}
+          {page === 'docs' && <DocsPage />}
         </div>
       </main>
     </div>

@@ -20,8 +20,36 @@ export type ProviderAccount = {
   updatedAt: string | null
 }
 
-export type ModelResponse = { id: string; ownedBy: string; enabled: boolean }
+export type ModelResponse = {
+  id: string
+  provider: string
+  model: string
+  ownedBy: string
+  displayName?: string | null
+  enabled: boolean
+}
+
 export type ModelListResponse = { provider: string; objectValue?: string; data: ModelResponse[] }
+
+export type ManualModelRequest = {
+  accountId: number
+  model: string
+  displayName?: string
+  ownedBy?: string
+  enabled: boolean
+}
+
+export type ApiKey = {
+  id: number
+  name: string
+  prefix: string
+  apiKey?: string | null
+  enabled: boolean
+  expiresAt: string | null
+  lastUsedAt: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
 
 export type SessionResponse = {
   id: string

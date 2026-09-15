@@ -14,7 +14,7 @@ import java.time.OffsetDateTime
 
 /**
  * One upstream provider account. Multiple API protocols can share one account
- * and each protocol may have its own base URL.
+ * and each protocol has its own complete POST endpoint URL.
  */
 @Entity
 @Table(

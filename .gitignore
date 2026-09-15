@@ -12,3 +12,5 @@ dist/
 
 etc/prod.env
 etc/dev.env
+
+*.private.env.json

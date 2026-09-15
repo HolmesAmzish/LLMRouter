@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.net.URI
 import java.time.OffsetDateTime
 
 @Service
@@ -24,36 +25,49 @@ class AccountService(
     private val mapper: ObjectMapper
 ) {
     @Transactional
-    fun create(request: ProviderAccountRequest): ProviderAccountResponse = repository.save(
-        ProviderAccount(
-            name = request.name,
-            defaultProtocol = request.protocolEndpoints.keys.first(),
-            baseUrl = request.protocolEndpoints.values.first().trimEnd('/'),
-            protocolEndpoints = request.protocolEndpoints.mapKeys { (protocol, _) -> protocol.name }.mapValues { (_, url) -> url.trimEnd('/') },
-            apiKey = request.apiKey,
-            enabled = request.enabled,
-            priority = request.priority,
-            weight = request.weight,
-            balanceEndpoint = request.balanceEndpoint?.trim(),
-            modelMapping = request.modelMapping,
-            configuration = request.configuration
+    fun create(request: ProviderAccountRequest): ProviderAccountResponse {
+        require(request.protocolEndpoints.isNotEmpty()) {
+            "At least one protocol endpoint is required"
+        }
+
+        val endpoints = request.protocolEndpoints
+            .mapValues { (_, url) -> url.trim() }
+        endpoints.values.forEach(::validateEndpoint)
+
+        val account = repository.save(
+            ProviderAccount(
+                name = request.name.trim(),
+                defaultProtocol = endpoints.keys.first(),
+                baseUrl = endpoints.values.first(),
+                protocolEndpoints = endpoints.mapKeys { (protocol, _) -> protocol.name },
+                apiKey = request.apiKey,
+                enabled = request.enabled,
+                priority = request.priority,
+                weight = request.weight,
+                balanceEndpoint = request.balanceEndpoint?.trim()?.takeIf { it.isNotEmpty() },
+                modelMapping = request.modelMapping,
+                configuration = request.configuration
+            )
         )
-    ).let(ProviderAccountMapper::toResponse)
+        return ProviderAccountMapper.toResponse(account)
+    }
 
     @Transactional
     fun update(id: Long, patch: ProviderAccountPatch): ProviderAccountResponse {
         val account = repository.findById(id).orElseThrow()
-        patch.name?.let { account.name = it }
-        patch.protocolEndpoints?.takeIf { it.isNotEmpty() }?.let { endpoints ->
-            account.protocolEndpoints = endpoints.mapKeys { (protocol, _) -> protocol.name }.mapValues { (_, url) -> url.trimEnd('/') }
+        patch.name?.takeIf { it.isNotBlank() }?.let { account.name = it.trim() }
+        patch.protocolEndpoints?.takeIf { it.isNotEmpty() }?.let { requested ->
+            val endpoints = requested.mapValues { (_, url) -> url.trim() }
+            endpoints.values.forEach(::validateEndpoint)
+            account.protocolEndpoints = endpoints.mapKeys { (protocol, _) -> protocol.name }
             account.defaultProtocol = endpoints.keys.first()
-            account.baseUrl = endpoints.values.first().trimEnd('/')
+            account.baseUrl = endpoints.values.first()
         }
         patch.apiKey?.takeIf { it.isNotBlank() }?.let { account.apiKey = it }
         patch.enabled?.let { account.enabled = it }
         patch.priority?.let { account.priority = it }
         patch.weight?.let { account.weight = it }
-        patch.balanceEndpoint?.let { account.balanceEndpoint = it }
+        patch.balanceEndpoint?.let { account.balanceEndpoint = it.trim().takeIf { value -> value.isNotEmpty() } }
         patch.modelMapping?.let { account.modelMapping = it }
         patch.configuration?.let { account.configuration = it }
         return ProviderAccountMapper.toResponse(account)
@@ -81,7 +95,7 @@ class AccountService(
 
     suspend fun refreshBalance(id: Long): AccountBalanceResponse = withContext(Dispatchers.IO) {
         val account = repository.findById(id).orElseThrow()
-        val endpoint = account.balanceEndpoint ?: defaultBalanceEndpoint(account.baseUrl)
+        val endpoint = account.balanceEndpoint
         if (endpoint == null) {
             account.status = AccountStatus.UNSUPPORTED.name.lowercase()
             account.balanceCheckedAt = OffsetDateTime.now()
@@ -104,10 +118,12 @@ class AccountService(
         AccountBalanceResponse(id, account.balance, account.currency, status, account.balanceCheckedAt.toString())
     }
 
-    private fun defaultBalanceEndpoint(baseUrl: String): String? = when {
-        baseUrl.contains("openrouter.ai") -> "$baseUrl/api/v1/key"
-        baseUrl.contains("api.deepseek.com") -> "$baseUrl/user/balance"
-        else -> null
+    private fun validateEndpoint(url: String) {
+        require(url.isNotBlank()) { "Protocol endpoint URL must not be blank" }
+        val uri = runCatching { URI(url) }.getOrElse { throw IllegalArgumentException("Invalid protocol endpoint URL: $url") }
+        require(uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) { "Protocol endpoint must use http or https" }
+        require(!uri.host.isNullOrBlank()) { "Protocol endpoint must contain a host" }
+        require(!uri.path.isNullOrBlank()) { "Protocol endpoint must be a complete endpoint URL" }
     }
 
     private fun parseBalance(body: JsonNode): Pair<Double?, String?> {

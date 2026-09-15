@@ -271,6 +271,7 @@ object Adapters {
                 function.set<JsonNode>("parameters", if (tool.schema == null) mapper.createObjectNode().put("type", "object") as JsonNode else mapper.valueToTree(tool.schema))
             }
         }
+        body.put("stream", request.stream)
         return body
     }
 
@@ -318,6 +319,7 @@ object Adapters {
                 item.set<JsonNode>("parameters", parameters)
             }
         }
+        body.put("stream", request.stream)
         return body
     }
 
@@ -362,6 +364,7 @@ object Adapters {
                 item.set<JsonNode>("input_schema", if (tool.schema == null) mapper.createObjectNode().put("type", "object") as JsonNode else mapper.valueToTree(tool.schema))
             }
         }
+        body.put("stream", request.stream)
         return body
     }
 
