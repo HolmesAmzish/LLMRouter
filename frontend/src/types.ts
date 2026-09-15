@@ -24,9 +24,14 @@ export type ModelResponse = {
   id: string
   provider: string
   model: string
+  protocol: Protocol
+  protocols?: Protocol[]
   ownedBy: string
   displayName?: string | null
+  upstreamModel: string
   enabled: boolean
+  maxContextTokens?: number | null
+  maxOutputTokens?: number | null
 }
 
 export type ModelListResponse = { provider: string; objectValue?: string; data: ModelResponse[] }
@@ -34,9 +39,13 @@ export type ModelListResponse = { provider: string; objectValue?: string; data: 
 export type ManualModelRequest = {
   accountId: number
   model: string
+  protocol?: Protocol
+  upstreamModel?: string
   displayName?: string
   ownedBy?: string
   enabled: boolean
+  maxContextTokens?: number
+  maxOutputTokens?: number
 }
 
 export type ApiKey = {
@@ -47,6 +56,12 @@ export type ApiKey = {
   enabled: boolean
   expiresAt: string | null
   lastUsedAt: string | null
+  maxBudget?: number | null
+  spend?: number
+  rpmLimit?: number | null
+  tpmLimit?: number | null
+  models?: string[]
+  metadata?: Record<string, string>
   createdAt: string | null
   updatedAt: string | null
 }
@@ -66,17 +81,26 @@ export type SessionResponse = {
 
 export type UsageRecord = {
   id: number
+  requestId?: string
   sessionId: string | null
+  apiKeyId?: number | null
+  apiKeyName?: string | null
   provider: string
   accountName: string | null
   model: string
+  publicModel?: string
+  upstreamModel?: string
   protocol: Protocol
   inputTokens: number
   outputTokens: number
   totalTokens: number
   costCents: number | null
   latencyMs: number
+  firstTokenMs?: number | null
+  apiBase?: string | null
+  cacheHit?: boolean
   status: string
+  statusCode?: number | null
   createdAt: string | null
 }
 

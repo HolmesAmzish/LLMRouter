@@ -10,6 +10,8 @@ data class UsageFilter(
     val accountName: String? = null,
     val model: String? = null,
     val sessionId: String? = null,
+    val apiKeyId: Long? = null,
+    val requestId: String? = null,
     val page: Int = 0,
     val size: Int = 20
 )

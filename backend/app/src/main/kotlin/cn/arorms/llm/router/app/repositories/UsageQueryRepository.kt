@@ -1,5 +1,6 @@
 package cn.arorms.llm.router.app.repositories
 
+import cn.arorms.framework.common.domain.QBaseEntity
 import cn.arorms.llm.router.app.entities.QUsageRecord
 import cn.arorms.llm.router.app.entities.UsageRecord
 import com.querydsl.jpa.impl.JPAQueryFactory
@@ -14,6 +15,7 @@ class UsageQueryRepository(
 ) {
     private val queryFactory = JPAQueryFactory(entityManager)
     private val usage = QUsageRecord.usageRecord
+    private val base = QBaseEntity("usageRecord")
 
     fun page(
         from: LocalDateTime?,
@@ -21,18 +23,22 @@ class UsageQueryRepository(
         provider: String?,
         model: String?,
         sessionId: String?,
+        apiKeyId: Long?,
+        requestId: String?,
         page: Int,
         size: Int
     ): Pair<List<UsageRecord>, Long> {
-        val predicate = usage.createdAt.goe(from ?: LocalDateTime.MIN)
-            .and(usage.createdAt.loe(to ?: LocalDateTime.MAX))
+        val predicate = base.createdAt.goe(from ?: LocalDateTime.MIN)
+            .and(base.createdAt.loe(to ?: LocalDateTime.MAX))
             .and(provider?.let { usage.provider.eq(it) })
             .and(model?.let { usage.model.eq(it) })
             .and(sessionId?.let { usage.sessionId.eq(it) })
+            .and(apiKeyId?.let { usage.apiKeyId.eq(it) })
+            .and(requestId?.let { usage.requestId.eq(it) })
 
         val content = queryFactory.selectFrom(usage)
             .where(predicate)
-            .orderBy(usage.createdAt.desc())
+            .orderBy(base.createdAt.desc())
             .offset(page.toLong() * size)
             .limit(size.toLong())
             .fetch()
@@ -48,6 +54,20 @@ class UsageQueryRepository(
         to: LocalDateTime?,
         provider: String?,
         model: String?,
-        sessionId: String?
-    ): Long = usageRecordRepository.totalTokens(from, to, provider, model, sessionId) ?: 0L
+        sessionId: String?,
+        apiKeyId: Long?,
+        requestId: String?
+    ): Long {
+        val predicate = base.createdAt.goe(from ?: LocalDateTime.MIN)
+            .and(base.createdAt.loe(to ?: LocalDateTime.MAX))
+            .and(provider?.let { usage.provider.eq(it) })
+            .and(model?.let { usage.model.eq(it) })
+            .and(sessionId?.let { usage.sessionId.eq(it) })
+            .and(apiKeyId?.let { usage.apiKeyId.eq(it) })
+            .and(requestId?.let { usage.requestId.eq(it) })
+        return queryFactory.select(usage.totalTokens.sum())
+            .from(usage)
+            .where(predicate)
+            .fetchOne() ?: 0L
+    }
 }

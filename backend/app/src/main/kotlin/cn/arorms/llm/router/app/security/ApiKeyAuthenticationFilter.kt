@@ -31,6 +31,7 @@ class ApiKeyAuthenticationFilter(private val apiKeyService: ApiKeyService) : Onc
             return
         }
 
+        request.setAttribute("gateway.apiKey", apiKey)
         SecurityContextHolder.getContext().authentication = UsernamePasswordAuthenticationToken(
             apiKey.name,
             rawKey,

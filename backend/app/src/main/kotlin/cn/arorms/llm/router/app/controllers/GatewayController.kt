@@ -1,6 +1,7 @@
 package cn.arorms.llm.router.app.controllers
 
 import cn.arorms.llm.router.app.services.GatewayService
+import cn.arorms.llm.router.app.entities.ApiKey
 import cn.arorms.llm.router.app.services.ModelService
 import cn.arorms.llm.router.common.enums.Protocol
 import cn.arorms.llm.router.common.responses.ModelListResponse
@@ -10,6 +11,8 @@ import org.springframework.http.ResponseEntity
 import org.springframework.http.codec.ServerSentEvent
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter
 import org.springframework.web.bind.annotation.*
+import org.springframework.web.context.request.RequestContextHolder
+import org.springframework.web.context.request.ServletRequestAttributes
 import reactor.core.publisher.Mono
 import reactor.core.Disposable
 import reactor.core.publisher.Flux
@@ -23,20 +26,23 @@ class GatewayController(
 ) {
     @PostMapping("/v1/chat/completions")
     fun openAiChat(@RequestBody body: String): Any {
-        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.OPENAI))
-        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.OPENAI)) }
+        val apiKey = currentApiKey()
+        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.OPENAI, apiKey))
+        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.OPENAI, apiKey)) }
     }
 
     @PostMapping("/v1/responses")
     fun openAiResponses(@RequestBody body: String): Any {
-        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.OPENAI_RESPONSES))
-        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.OPENAI_RESPONSES)) }
+        val apiKey = currentApiKey()
+        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.OPENAI_RESPONSES, apiKey))
+        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.OPENAI_RESPONSES, apiKey)) }
     }
 
     @PostMapping("/v1/messages")
     fun anthropic(@RequestBody body: String): Any {
-        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.ANTHROPIC))
-        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.ANTHROPIC)) }
+        val apiKey = currentApiKey()
+        if (streamRequest.containsMatchIn(body)) return sse(gatewayService.chatStream(body, Protocol.ANTHROPIC, apiKey))
+        return mono { ResponseEntity.ok().contentType(MediaType.APPLICATION_JSON).body(gatewayService.chat(body, Protocol.ANTHROPIC, apiKey)) }
     }
 
     // Gemini routes are intentionally disabled for now.
@@ -46,6 +52,10 @@ class GatewayController(
 
     @GetMapping("/v1/openai/responses/models")
     suspend fun openAiResponsesModels(): ModelListResponse = modelService.localModels()
+
+    private fun currentApiKey(): ApiKey? =
+        (RequestContextHolder.getRequestAttributes() as? ServletRequestAttributes)
+            ?.request?.getAttribute("gateway.apiKey") as? ApiKey
 
     private fun sse(events: Flux<ServerSentEvent<String>>): SseEmitter {
         val emitter = SseEmitter(0L)

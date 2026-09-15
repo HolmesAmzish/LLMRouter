@@ -21,28 +21,44 @@ class ModelService(
     private val mapper: ObjectMapper
 ) {
     @Transactional
-    fun localModels(): ModelListResponse = ModelListResponse(
-        provider = "llm-router",
-        data = catalogRepository.findByEnabledTrue().map { it.toResponse() }.distinctBy(ModelResponse::id)
-    )
+    fun localModels(): ModelListResponse {
+        val enabledAccountIds = accountRepository.findAll().filter { it.enabled }.mapNotNull { it.id }.toSet()
+        val grouped = catalogRepository.findByEnabledTrue()
+            .filter { it.accountId in enabledAccountIds }
+            .groupBy { it.publicName ?: "${it.provider}/${it.modelId}" }
+        return ModelListResponse(
+            provider = "llm-router",
+            data = grouped.map { (_, deployments) ->
+                deployments.first().toResponse(protocols = deployments.map { it.protocol }.toSet())
+            }
+        )
+    }
 
     @Transactional
     fun create(request: ManualModelRequest): ModelResponse {
         val account = accountRepository.findById(request.accountId).orElseThrow()
         require(request.model.isNotBlank() && !request.model.contains('/')) { "Model name must not be blank or contain '/'" }
-        require(!catalogRepository.existsByAccountIdAndModelId(account.id ?: 0L, request.model)) {
-            "Model ${request.model} already exists for provider ${account.name}"
+        require(!catalogRepository.existsByAccountIdAndModelIdAndProtocol(account.id ?: 0L, request.model, request.protocol)) {
+            "Model ${request.model} already exists for ${account.name}/${request.protocol}"
         }
+        require(account.supports(request.protocol)) {
+            "${account.name} does not support ${request.protocol}"
+        }
+        val protocol = request.protocol
         return catalogRepository.save(
             ModelCatalog(
                 accountId = account.id ?: 0L,
                 provider = account.name,
-                protocol = account.defaultProtocol,
+                protocol = protocol,
                 modelId = request.model,
+                publicName = "${account.name}/${request.model}",
+                upstreamModel = request.upstreamModel ?: request.model,
                 ownedBy = request.ownedBy ?: account.name,
                 displayName = request.displayName,
                 enabled = request.enabled,
-                manual = true
+                manual = true,
+                maxContextTokens = request.maxContextTokens,
+                maxOutputTokens = request.maxOutputTokens
             )
         ).toResponse()
     }
@@ -79,18 +95,19 @@ class ModelService(
         val modelsEndpoint = account.configuration["modelsEndpoint"]
             ?: throw IllegalArgumentException("Configure modelsEndpoint before syncing ${account.name}")
         val upstreamModels = fetchUpstreamModels(account.id, account.name, protocol, modelsEndpoint, account.apiKey)
-        val existing = catalogRepository.findByAccountId(accountId)
+        val existing = catalogRepository.findByAccountIdAndProtocol(accountId, protocol)
         val existingByModel = existing.associateBy { it.modelId }
         val synced = upstreamModels.map { response ->
             val current = existingByModel[response.model]
             current?.apply {
-                this.protocol = protocol
                 this.ownedBy = response.ownedBy
             } ?: ModelCatalog(
                 accountId = accountId,
                 provider = account.name,
                 protocol = protocol,
                 modelId = response.model,
+                publicName = "${account.name}/${response.model}",
+                upstreamModel = response.model,
                 ownedBy = response.ownedBy,
                 displayName = response.displayName,
                 enabled = true,
@@ -120,17 +137,24 @@ class ModelService(
                 id = "$provider/$modelId",
                 provider = provider,
                 model = modelId,
+                protocol = protocol,
+                upstreamModel = modelId,
                 ownedBy = it.path("owned_by").asText(it.path("ownedBy").asText(provider))
             )
         }
     }
 
-    private fun ModelCatalog.toResponse() = ModelResponse(
-        id = "$provider/$modelId",
+    private fun ModelCatalog.toResponse(protocols: Set<cn.arorms.llm.router.common.enums.Protocol> = setOf(protocol)) = ModelResponse(
+        id = publicName ?: "$provider/$modelId",
         provider = provider,
         model = modelId,
+        protocol = protocol,
+        protocols = protocols,
         ownedBy = ownedBy ?: provider,
         displayName = displayName,
-        enabled = enabled
+        upstreamModel = upstreamModel ?: modelId,
+        enabled = enabled,
+        maxContextTokens = maxContextTokens,
+        maxOutputTokens = maxOutputTokens
     )
 }

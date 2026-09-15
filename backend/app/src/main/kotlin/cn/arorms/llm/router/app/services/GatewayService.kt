@@ -4,6 +4,8 @@ import cn.arorms.llm.router.app.adapters.Adapters
 import cn.arorms.llm.router.app.adapters.InboundStreamState
 import cn.arorms.llm.router.app.adapters.SseFrame
 import cn.arorms.llm.router.app.adapters.StreamAdapters
+import cn.arorms.llm.router.app.entities.ApiKey
+import cn.arorms.llm.router.app.entities.ModelCatalog
 import cn.arorms.llm.router.app.entities.ProviderAccount
 import cn.arorms.llm.router.app.repositories.ModelCatalogRepository
 import cn.arorms.llm.router.app.repositories.ProviderAccountRepository
@@ -25,11 +27,15 @@ import org.springframework.web.server.ResponseStatusException
 import reactor.core.publisher.Flux
 
 private data class ResolvedModel(
+    val catalog: ModelCatalog,
     val account: ProviderAccount,
     val provider: String,
     val model: String,
     val qualifiedModel: String
-)
+) {
+    val upstreamModel: String
+        get() = account.modelMapping[model] ?: catalog.upstreamModel ?: model
+}
 
 @Service
 class GatewayService(
@@ -41,16 +47,17 @@ class GatewayService(
     private val streamingClient: GatewayStreamingClient,
     private val mapper: ObjectMapper
 ) {
-    suspend fun chat(rawBody: String, inboundProtocol: Protocol): String = withContext(Dispatchers.IO) {
+    suspend fun chat(rawBody: String, inboundProtocol: Protocol, apiKey: ApiKey? = null): String = withContext(Dispatchers.IO) {
         val body = mapper.readTree(rawBody)
         val request = Adapters.parseRequest(body, inboundProtocol)
         if (request.stream) throw ResponseStatusException(HttpStatus.UNPROCESSABLE_ENTITY, "Use the stream-capable gateway route for stream:true")
-        val resolved = resolveModel(request.model, inboundProtocol)
-        val upstreamEndpoint = resolved.account.endpointFor(inboundProtocol)
-            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No ${inboundProtocol.name} endpoint for ${resolved.provider}")
-        val upstreamModel = resolved.account.modelMapping[resolved.model] ?: resolved.model
-        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = upstreamModel), inboundProtocol)
-        val fingerprint = CacheService.fingerprint(inboundProtocol.name, resolved.qualifiedModel, request.thinkingEffort.name, outboundRequest.toString())
+        val resolved = resolveModel(request.model, inboundProtocol, apiKey)
+        val upstreamProtocol = resolved.catalog.protocol
+        val upstreamEndpoint = resolved.account.endpointFor(upstreamProtocol)
+            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No ${upstreamProtocol.name} endpoint for ${resolved.provider}")
+        val upstreamModel = resolved.upstreamModel
+        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = upstreamModel), upstreamProtocol)
+        val fingerprint = CacheService.fingerprint(upstreamProtocol.name, resolved.qualifiedModel, request.thinkingEffort.name, outboundRequest.toString())
 
         val startedAt = System.nanoTime()
         val cache = cacheService.get(fingerprint)
@@ -59,25 +66,46 @@ class GatewayService(
         } else {
             val url = upstreamUrl(upstreamEndpoint)
             val payload = mapper.writeValueAsString(outboundRequest)
-            val raw = httpClient.postJson(url, headers(inboundProtocol, resolved.account.apiKey), payload)
+            val raw = httpClient.postJson(url, headers(upstreamProtocol, resolved.account.apiKey), payload)
             val parsed = mapper.readTree(raw)
-            val canonical = Adapters.parseResponse(parsed, request.copy(model = upstreamModel), inboundProtocol.name, resolved.account.name)
+            val canonical = Adapters.parseResponse(parsed, request.copy(model = upstreamModel), upstreamProtocol.name, resolved.account.name)
             val inbound = mapper.writeValueAsString(Adapters.toInboundResponse(canonical, inboundProtocol))
-            cacheService.put(fingerprint, inbound, request.sessionId, inboundProtocol, resolved.qualifiedModel)
-            usageRecorder.record(request.sessionId, resolved.account, resolved.provider, resolved.model, inboundProtocol, canonical, startedAt, "success")
+            cacheService.put(fingerprint, inbound, request.sessionId, upstreamProtocol, resolved.qualifiedModel)
+            usageRecorder.record(
+                sessionId = request.sessionId,
+                account = resolved.account,
+                providerName = resolved.provider,
+                requestedModel = resolved.model,
+                publicModel = resolved.qualifiedModel,
+                upstreamModel = upstreamModel,
+                protocol = upstreamProtocol,
+                response = canonical,
+                startedAt = startedAt,
+                status = "success",
+                apiKey = apiKey,
+                apiBase = upstreamEndpoint,
+                cacheKey = fingerprint
+            )
             usageRecorder.updateSession(request.sessionId, canonical)
             inbound
         }
     }
 
-    fun chatStream(rawBody: String, inboundProtocol: Protocol): Flux<ServerSentEvent<String>> = flux(Dispatchers.IO) {
+    fun chatStream(rawBody: String, inboundProtocol: Protocol, apiKey: ApiKey? = null): Flux<ServerSentEvent<String>> = flux(Dispatchers.IO) {
         val body = mapper.readTree(rawBody)
         val request = Adapters.parseRequest(body, inboundProtocol).copy(stream = true)
-        val resolved = resolveModel(request.model, inboundProtocol)
-        val upstreamEndpoint = resolved.account.endpointFor(inboundProtocol)
-            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No ${inboundProtocol.name} endpoint for ${resolved.provider}")
-        val upstreamModel = resolved.account.modelMapping[resolved.model] ?: resolved.model
-        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = upstreamModel), inboundProtocol)
+        val resolved = resolveModel(request.model, inboundProtocol, apiKey)
+        val upstreamProtocol = resolved.catalog.protocol
+        val upstreamEndpoint = resolved.account.endpointFor(upstreamProtocol)
+            ?: throw ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "No ${upstreamProtocol.name} endpoint for ${resolved.provider}")
+        if (upstreamProtocol != inboundProtocol) {
+            throw ResponseStatusException(
+                HttpStatus.UNPROCESSABLE_ENTITY,
+                "Cross-protocol streaming is not supported for ${resolved.qualifiedModel} (${resolved.catalog.protocol})"
+            )
+        }
+        val upstreamModel = resolved.upstreamModel
+        val outboundRequest = Adapters.toOutboundRequest(request.copy(model = upstreamModel), upstreamProtocol)
         val startedAt = System.nanoTime()
         val state = InboundStreamState(requestedModel = resolved.qualifiedModel, requestedProtocol = inboundProtocol)
         val chunks = mutableListOf<ChatStreamChunk>()
@@ -86,12 +114,12 @@ class GatewayService(
 
         try {
             streamingClient
-                .stream(streamingUrl(upstreamEndpoint), headers(inboundProtocol, resolved.account.apiKey), mapper.writeValueAsString(outboundRequest))
+                .stream(streamingUrl(upstreamEndpoint), headers(upstreamProtocol, resolved.account.apiKey), mapper.writeValueAsString(outboundRequest))
                 .asFlow()
                 .collect { raw ->
                     if (raw.contains("[DONE]")) sawDone = true
                     buffer.append(raw)
-                    extractFrames(buffer, inboundProtocol, chunks)?.forEach { frame ->
+                    extractFrames(buffer, upstreamProtocol, chunks)?.forEach { frame ->
                         if (frame.data.isNotBlank()) {
                             val builder = ServerSentEvent.builder<String>(frame.data)
                             frame.event?.takeIf { it.isNotBlank() }?.let(builder::event)
@@ -121,7 +149,20 @@ class GatewayService(
                 accountName = resolved.account.name,
                 createdAt = startedAt / 1_000_000_000
             )
-            usageRecorder.record(request.sessionId, resolved.account, resolved.provider, resolved.model, inboundProtocol, response, startedAt, "success")
+            usageRecorder.record(
+                sessionId = request.sessionId,
+                account = resolved.account,
+                providerName = resolved.provider,
+                requestedModel = resolved.model,
+                publicModel = resolved.qualifiedModel,
+                upstreamModel = upstreamModel,
+                protocol = upstreamProtocol,
+                response = response,
+                startedAt = startedAt,
+                status = "success",
+                apiKey = apiKey,
+                apiBase = upstreamEndpoint
+            )
             usageRecorder.updateSession(request.sessionId, response)
         } catch (cause: Throwable) {
             usageRecorder.record(
@@ -129,7 +170,9 @@ class GatewayService(
                 account = resolved.account,
                 providerName = resolved.provider,
                 requestedModel = resolved.model,
-                protocol = inboundProtocol,
+                publicModel = resolved.qualifiedModel,
+                upstreamModel = resolved.upstreamModel,
+                protocol = resolved.catalog.protocol,
                 response = ChatResponse(
                     id = state.fallbackId(),
                     model = resolved.qualifiedModel,
@@ -140,7 +183,9 @@ class GatewayService(
                     createdAt = System.nanoTime() / 1_000_000_000
                 ),
                 startedAt = startedAt,
-                status = "failed"
+                status = "failed",
+                apiKey = apiKey,
+                apiBase = upstreamEndpoint
             )
             throw cause
         }
@@ -174,20 +219,28 @@ class GatewayService(
         return frames
     }
 
-    private fun resolveModel(qualifiedModel: String, protocol: Protocol): ResolvedModel {
+    private fun resolveModel(qualifiedModel: String, protocol: Protocol, apiKey: ApiKey? = null): ResolvedModel {
         val separator = qualifiedModel.indexOf('/')
         require(separator > 0 && separator < qualifiedModel.length - 1) {
             "model must use <provider>/<model> format"
         }
         val provider = qualifiedModel.substring(0, separator)
         val model = qualifiedModel.substring(separator + 1)
-        val catalog = modelRepository.findFirstByProviderAndModelIdAndEnabledTrue(provider, model)
+        val catalog = modelRepository
+            .findFirstByProviderAndModelIdAndProtocolAndEnabledTrue(provider, model, protocol)
+            ?: modelRepository
+                .findFirstByProviderAndModelIdAndEnabledTrueOrderByPriorityAscIdAsc(provider, model)
             ?: throw ResponseStatusException(HttpStatus.NOT_FOUND, "Unknown model $qualifiedModel")
         val account = accountRepository.findById(catalog.accountId).orElseThrow()
-        require(account.enabled && account.supports(protocol)) {
-            "Model $qualifiedModel is not available for $protocol"
+        require(account.enabled && account.supports(catalog.protocol)) {
+            "Model $qualifiedModel is not available for ${catalog.protocol}"
         }
-        return ResolvedModel(account, catalog.provider, catalog.modelId, qualifiedModel)
+        apiKey?.models?.takeIf { it.isNotEmpty() }?.let { allowed ->
+            if (qualifiedModel !in allowed) {
+                throw ResponseStatusException(HttpStatus.FORBIDDEN, "API key cannot access $qualifiedModel")
+            }
+        }
+        return ResolvedModel(catalog, account, catalog.provider, catalog.modelId, qualifiedModel)
     }
 
     private fun upstreamUrl(endpoint: String): String = endpoint

@@ -6,6 +6,7 @@ import cn.arorms.llm.router.common.requests.ApiKeyRequest
 import cn.arorms.llm.router.common.responses.ApiKeyResponse
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -20,11 +21,16 @@ class ApiKeyService(private val repository: ApiKeyRepository) {
     fun create(request: ApiKeyRequest): ApiKeyResponse {
         val rawKey = generateKey()
         val entity = ApiKey(
-            name = request.name,
+            name = request.name.trim(),
             keyHash = hash(rawKey),
             prefix = rawKey.take(16),
             enabled = true,
-            expiresAt = request.expiresAt
+            expiresAt = request.expiresAt,
+            maxBudget = request.maxBudget?.toBigDecimal(),
+            rpmLimit = request.rpmLimit,
+            tpmLimit = request.tpmLimit,
+            models = request.models,
+            metadata = request.metadata
         )
         val saved = repository.save(entity)
         return toResponse(saved, rawKey)
@@ -46,8 +52,10 @@ class ApiKeyService(private val repository: ApiKeyRepository) {
     @Transactional
     fun authenticate(rawKey: String): ApiKey? {
         val key = repository.findByKeyHash(hash(rawKey)) ?: return null
-        if (!key.enabled || key.expiresAt?.isBefore(OffsetDateTime.now()) == true) return null
-        key.lastUsedAt = OffsetDateTime.now()
+        val now = OffsetDateTime.now()
+        if (!key.enabled || key.expiresAt?.isBefore(now) == true) return null
+        if (key.maxBudget != null && (key.spend ?: BigDecimal.ZERO) >= key.maxBudget) return null
+        key.lastUsedAt = now
         return key
     }
 
@@ -68,9 +76,16 @@ class ApiKeyService(private val repository: ApiKeyRepository) {
         name = key.name,
         prefix = key.prefix,
         apiKey = rawKey,
+        keyType = key.keyType ?: cn.arorms.llm.router.common.enums.ApiKeyType.GATEWAY,
         enabled = key.enabled,
         expiresAt = key.expiresAt,
         lastUsedAt = key.lastUsedAt,
+        maxBudget = key.maxBudget,
+        spend = key.spend ?: BigDecimal.ZERO,
+        rpmLimit = key.rpmLimit,
+        tpmLimit = key.tpmLimit,
+        models = key.models ?: emptySet(),
+        metadata = key.metadata ?: emptyMap(),
         createdAt = key.createdAt?.toString(),
         updatedAt = key.updatedAt?.toString()
     )

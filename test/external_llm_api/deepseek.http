@@ -1,0 +1,67 @@
+# Chat completions
+POST https://api.deepseek.com/chat/completions
+Authorization: Bearer {{deepseekApiKey}}
+Content-Type: application/json
+
+{
+  "model": "deepseek-flash",
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are a helpful assistant."
+    },
+    {
+      "role": "user",
+      "content": "Hello!"
+    }
+  ],
+  "thinking": {
+    "type": "enabled"
+  },
+  "reasoning_effort": "high",
+  "stream": true
+}
+
+
+### Responses
+POST https://api.deepseek.com/responses
+Accept: application/json
+Authorization: Bearer {{deepseekApiKey}}
+Content-Type: application/json
+
+{
+  "model": "deepseek-flash",
+  "input": "string",
+  "instructions": "string",
+  "reasoning": {
+    "effort": "none"
+  },
+  "max_output_tokens": 4096,
+  "stream": true,
+  "temperature": 1,
+  "top_p": 1,
+  "text": {
+    "format": {
+      "type": "text",
+      "name": "string",
+      "schema": {}
+    }
+  },
+  "tools": null,
+  "tool_choice": "none",
+  "top_logprobs": null,
+  "user": "string"
+}
+
+### Get Models
+GET https://api.deepseek.com/models
+Accept: application/json
+Authorization: Bearer {{deepseekApiKey}}
+
+
+### Get balance
+GET https://api.deepseek.com/user/balance
+Accept: application/json
+Authorization: Bearer {{deepseekApiKey}}
+
+###

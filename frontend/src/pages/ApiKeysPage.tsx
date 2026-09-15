@@ -5,7 +5,9 @@ import { Alert, Badge, Button, Card, CardHeader, EmptyState, Field, inputClass }
 
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[]>([])
-  const [draft, setDraft] = useState({ name: '', expiresAt: '' })
+  const [draft, setDraft] = useState({
+    name: '', expiresAt: '', maxBudget: '', rpmLimit: '', tpmLimit: '', models: ''
+  })
   const [createdKey, setCreatedKey] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -19,12 +21,17 @@ export default function ApiKeysPage() {
   const create = async () => {
     setBusy(true); setError('')
     try {
+      const models = draft.models.split(',').map((value) => value.trim()).filter(Boolean)
       const result = await api.post<ApiKey>('/api/v1/api-keys', {
         name: draft.name,
         expiresAt: draft.expiresAt ? new Date(draft.expiresAt).toISOString() : undefined,
+        maxBudget: draft.maxBudget ? Number(draft.maxBudget) : undefined,
+        rpmLimit: draft.rpmLimit ? Number(draft.rpmLimit) : undefined,
+        tpmLimit: draft.tpmLimit ? Number(draft.tpmLimit) : undefined,
+        models,
       })
       setCreatedKey(result.apiKey ?? '')
-      setDraft({ name: '', expiresAt: '' })
+      setDraft({ name: '', expiresAt: '', maxBudget: '', rpmLimit: '', tpmLimit: '', models: '' })
       await load()
     } catch (cause) { setError(String(cause instanceof Error ? cause.message : cause)) }
     finally { setBusy(false) }
@@ -53,7 +60,16 @@ export default function ApiKeysPage() {
                     {key.expiresAt && <Badge tone="warning">expires</Badge>}
                   </div>
                   <p className="mt-1 font-mono text-xs text-muted-foreground">{key.prefix}…</p>
-                  <p className="text-xs text-muted-foreground">Last used: {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : 'never'}</p>
+                  <p className="text-xs text-muted-foreground">
+                    Last used: {key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString() : 'never'}
+                    {typeof key.spend === 'number' && <> · spend {key.spend.toFixed(4)}</>}
+                    {key.maxBudget != null && <> / {key.maxBudget}</>}
+                    {key.rpmLimit != null && <> · {key.rpmLimit} RPM</>}
+                    {key.tpmLimit != null && <> · {key.tpmLimit} TPM</>}
+                  </p>
+                  {key.models && key.models.length > 0 && (
+                    <p className="text-xs text-muted-foreground">Models: {key.models.join(', ')}</p>
+                  )}
                 </div>
                 <div className="flex gap-2">
                   {key.enabled && <Button onClick={() => void mutate(() => api.post(`/api/v1/api-keys/${key.id}/revoke`))}>Revoke</Button>}
@@ -71,6 +87,12 @@ export default function ApiKeysPage() {
           <form className="grid gap-3 p-4" onSubmit={(event) => { event.preventDefault(); void create() }}>
             <Field label="Name"><input className={inputClass} required value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></Field>
             <Field label="Expires at"><input className={inputClass} type="datetime-local" value={draft.expiresAt} onChange={(event) => setDraft({ ...draft, expiresAt: event.target.value })} /></Field>
+            <Field label="Max budget"><input className={inputClass} type="number" step="0.000001" value={draft.maxBudget} onChange={(event) => setDraft({ ...draft, maxBudget: event.target.value })} /></Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="RPM limit"><input className={inputClass} type="number" value={draft.rpmLimit} onChange={(event) => setDraft({ ...draft, rpmLimit: event.target.value })} /></Field>
+              <Field label="TPM limit"><input className={inputClass} type="number" value={draft.tpmLimit} onChange={(event) => setDraft({ ...draft, tpmLimit: event.target.value })} /></Field>
+            </div>
+            <Field label="Allowed models"><textarea className={`${inputClass} h-20 resize-y`} placeholder="volcengine/deepseek-v4-flash, openai/gpt-5" value={draft.models} onChange={(event) => setDraft({ ...draft, models: event.target.value })} /></Field>
             <Button type="submit" variant="primary" disabled={busy}>Create key</Button>
           </form>
         </Card>

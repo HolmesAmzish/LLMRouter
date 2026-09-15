@@ -23,14 +23,18 @@ class UsageService(
         val from = filter.from?.let { LocalDateTime.parse(it, time) }
         val to = filter.to?.let { LocalDateTime.parse(it, time) }
         val (records, total) = queryRepository.page(
-            from, to, filter.provider, filter.model, filter.sessionId, filter.page, filter.size
+            from, to, filter.provider, filter.model, filter.sessionId,
+            filter.apiKeyId, filter.requestId, filter.page, filter.size
         )
         return UsagePageResponse(
             content = records.map(UsageMapper::toResponse),
             total = total,
             page = filter.page,
             size = filter.size,
-            totalTokens = queryRepository.totalTokens(from, to, filter.provider, filter.model, filter.sessionId)
+            totalTokens = queryRepository.totalTokens(
+            from, to, filter.provider, filter.model, filter.sessionId,
+            filter.apiKeyId, filter.requestId
+        )
         )
     }
 

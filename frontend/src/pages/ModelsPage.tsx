@@ -11,7 +11,7 @@ export default function ModelsPage({ onChanged }: { onChanged?: () => void }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [draft, setDraft] = useState<ManualModelRequest>({
-    accountId: 0, model: '', displayName: '', ownedBy: '', enabled: true,
+    accountId: 0, model: '', protocol: 'OPENAI', displayName: '', ownedBy: '', enabled: true,
   })
 
   const load = useCallback(async () => {
@@ -80,6 +80,11 @@ export default function ModelsPage({ onChanged }: { onChanged?: () => void }) {
               </select>
             </Field>
             <Field label="Model name"><input className={inputClass} required value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} /></Field>
+            <Field label="Protocol">
+              <select className={inputClass} value={draft.protocol ?? 'OPENAI'} onChange={(event) => setDraft({ ...draft, protocol: event.target.value as Protocol })}>
+                {protocols.map((protocol) => <option key={protocol} value={protocol}>{protocol}</option>)}
+              </select>
+            </Field>
             <Field label="Display name"><input className={inputClass} value={draft.displayName ?? ''} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></Field>
             <Field label="Owned by"><input className={inputClass} value={draft.ownedBy ?? ''} onChange={(event) => setDraft({ ...draft, ownedBy: event.target.value })} /></Field>
             <label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /> Enabled</label>
