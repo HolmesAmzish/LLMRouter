@@ -3,9 +3,11 @@ package cn.arorms.llm.router.app.services
 import cn.arorms.llm.router.app.entities.ApiKey
 import cn.arorms.llm.router.app.entities.ProviderAccount
 import cn.arorms.llm.router.app.entities.UsageRecord
+import cn.arorms.llm.router.app.repositories.ApiKeyRepository
 import cn.arorms.llm.router.app.repositories.SessionRepository
 import cn.arorms.llm.router.app.repositories.UsageRecordRepository
 import cn.arorms.llm.router.common.enums.Protocol
+import cn.arorms.llm.router.common.enums.UsageDataSource
 import cn.arorms.llm.router.common.responses.ChatResponse
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -18,7 +20,7 @@ import java.util.UUID
 class UsageRecorder(
     private val usageRepository: UsageRecordRepository,
     private val sessionRepository: SessionRepository,
-    private val apiKeyRepository: cn.arorms.llm.router.app.repositories.ApiKeyRepository
+    private val apiKeyRepository: ApiKeyRepository
 ) {
     @Transactional
     fun record(
@@ -37,16 +39,17 @@ class UsageRecorder(
         cacheHit: Boolean = false,
         cacheKey: String? = null,
         statusCode: Int? = null,
-        firstTokenAt: Long? = null
+        firstTokenAt: Long? = null,
+        isStreaming: Boolean = false,
+        dataSource: UsageDataSource = UsageDataSource.UPSTREAM,
+        errorMessage: String? = null
     ): UsageRecord {
         val record = usageRepository.save(
             UsageRecord(
                 requestId = UUID.randomUUID().toString(),
-
                 sessionId = sessionId,
                 apiKeyId = apiKey?.id,
                 apiKeyName = apiKey?.name,
-
                 provider = providerName,
                 accountName = account.name,
                 model = requestedModel,
@@ -56,14 +59,21 @@ class UsageRecorder(
                 inputTokens = response.usage?.inputTokens ?: 0L,
                 outputTokens = response.usage?.outputTokens ?: 0L,
                 totalTokens = response.usage?.totalTokens ?: 0L,
-                costCents = response.usage?.costCents,
+                cacheReadTokens = response.usage?.cacheReadTokens ?: 0L,
+                cacheCreationTokens = response.usage?.cacheCreationTokens ?: 0L,
+                reasoningTokens = response.usage?.reasoningTokens,
+                inputTokenSemantics = response.usage?.inputTokenSemantics,
+                tokenDetails = response.usage?.tokenDetails,
                 latencyMs = (System.nanoTime() - startedAt) / 1_000_000,
                 firstTokenMs = firstTokenAt?.let { (it - startedAt) / 1_000_000 },
                 apiBase = apiBase,
                 cacheHit = cacheHit,
                 cacheKey = cacheKey,
+                dataSource = dataSource,
+                isStreaming = isStreaming,
                 status = status,
                 statusCode = statusCode,
+                errorMessage = errorMessage,
                 startedAt = startedNanoToOffset(startedAt),
                 finishedAt = OffsetDateTime.now()
             )

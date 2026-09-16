@@ -2,6 +2,7 @@ package cn.arorms.llm.router.app.services
 
 import cn.arorms.llm.router.app.entities.ProviderAccount
 import cn.arorms.llm.router.app.mappers.ProviderAccountMapper
+import cn.arorms.llm.router.app.repositories.ProviderModelRepository
 import cn.arorms.llm.router.app.repositories.ProviderAccountRepository
 import cn.arorms.llm.router.common.enums.AccountStatus
 import cn.arorms.llm.router.common.enums.Protocol
@@ -21,6 +22,8 @@ import java.time.OffsetDateTime
 @Service
 class AccountService(
     private val repository: ProviderAccountRepository,
+    private val providerModelRepository: ProviderModelRepository,
+    private val modelService: ModelService,
     private val httpClient: GatewayHttpClient,
     private val mapper: ObjectMapper
 ) {
@@ -30,8 +33,7 @@ class AccountService(
             "At least one protocol endpoint is required"
         }
 
-        val endpoints = request.protocolEndpoints
-            .mapValues { (_, url) -> url.trim() }
+        val endpoints = request.protocolEndpoints.mapValues { (_, url) -> url.trim() }
         endpoints.values.forEach(::validateEndpoint)
 
         val account = repository.save(
@@ -49,12 +51,18 @@ class AccountService(
                 configuration = request.configuration
             )
         )
-        return ProviderAccountMapper.toResponse(account)
+        modelService.replaceProviderModels(
+            providerId = account.id ?: 0L,
+            providerName = account.name,
+            requests = request.models
+        )
+        return toResponse(account)
     }
 
     @Transactional
     fun update(id: Long, patch: ProviderAccountPatch): ProviderAccountResponse {
         val account = repository.findById(id).orElseThrow()
+        val oldName = account.name
         patch.name?.takeIf { it.isNotBlank() }?.let { account.name = it.trim() }
         patch.protocolEndpoints?.takeIf { it.isNotEmpty() }?.let { requested ->
             val endpoints = requested.mapValues { (_, url) -> url.trim() }
@@ -70,14 +78,28 @@ class AccountService(
         patch.balanceEndpoint?.let { account.balanceEndpoint = it.trim().takeIf { value -> value.isNotEmpty() } }
         patch.modelMapping?.let { account.modelMapping = it }
         patch.configuration?.let { account.configuration = it }
-        return ProviderAccountMapper.toResponse(account)
+        val saved = repository.save(account)
+
+        if (patch.models != null) {
+            modelService.replaceProviderModels(saved.id ?: 0L, saved.name, patch.models)
+        } else if (saved.name != oldName) {
+            providerModelRepository.findByProviderIdOrderByModelIdAsc(saved.id ?: 0L).forEach { binding ->
+                binding.providerName = saved.name
+                providerModelRepository.save(binding)
+            }
+        }
+        return toResponse(saved)
     }
 
     @Transactional
-    fun delete(id: Long) = repository.deleteById(id)
+    fun delete(id: Long) {
+        providerModelRepository.deleteByProviderId(id)
+        repository.deleteById(id)
+    }
 
     @Transactional
-    fun get(id: Long): ProviderAccountResponse = repository.findById(id).orElseThrow().let(ProviderAccountMapper::toResponse)
+    fun get(id: Long): ProviderAccountResponse =
+        repository.findById(id).orElseThrow().let { toResponse(it) }
 
     @Transactional
     fun list(provider: String?, enabled: Boolean? = null): List<ProviderAccountResponse> {
@@ -85,7 +107,7 @@ class AccountService(
         return all.asSequence()
             .filter { provider == null || Protocol.entries.any { protocol -> protocol.name.equals(provider, true) && it.supports(protocol) } }
             .filter { enabled == null || it.enabled == enabled }
-            .map(ProviderAccountMapper::toResponse)
+            .map(::toResponse)
             .toList()
     }
 
@@ -104,42 +126,47 @@ class AccountService(
                 balance = account.balance,
                 currency = account.currency,
                 status = AccountStatus.UNSUPPORTED,
-                checkedAt = account.balanceCheckedAt.toString()
+                checkedAt = account.balanceCheckedAt?.toString()
             )
         }
 
-        val json = httpClient.getJson(endpoint, mapOf("Authorization" to "Bearer ${account.apiKey}"))
-        val parsed = parseBalance(mapper.readTree(json))
-        val status = if (parsed.first != null) AccountStatus.ACTIVE else AccountStatus.UNKNOWN
-        account.balance = parsed.first
-        account.currency = parsed.second
-        account.status = status.name.lowercase()
-        account.balanceCheckedAt = OffsetDateTime.now()
-        AccountBalanceResponse(id, account.balance, account.currency, status, account.balanceCheckedAt.toString())
-    }
-
-    private fun validateEndpoint(url: String) {
-        require(url.isNotBlank()) { "Protocol endpoint URL must not be blank" }
-        val uri = runCatching { URI(url) }.getOrElse { throw IllegalArgumentException("Invalid protocol endpoint URL: $url") }
-        require(uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) { "Protocol endpoint must use http or https" }
-        require(!uri.host.isNullOrBlank()) { "Protocol endpoint must contain a host" }
-        require(!uri.path.isNullOrBlank()) { "Protocol endpoint must be a complete endpoint URL" }
-    }
-
-    private fun parseBalance(body: JsonNode): Pair<Double?, String?> {
-        val candidates = listOf(
-            body.path("data").path("limits").path("remaining"),
+        val raw = httpClient.getJson(endpoint, headers(account.apiKey))
+        val body: JsonNode = mapper.readTree(raw)
+        val parsed = listOf(
+            body.path("balance"),
             body.path("data").path("balance"),
-            body.path("info").path("balance"),
-            body.path("balance_infos").get(0).path("total_balance"),
-            body.path("balance")
+            body.path("data").path("credit"),
+            body.path("credit")
+        ).firstOrNull { it.isNumber }?.asDouble()
+
+        parsed?.let {
+            account.balance = it
+            account.status = AccountStatus.ACTIVE.name.lowercase()
+        } ?: run {
+            account.status = AccountStatus.UNKNOWN.name.lowercase()
+        }
+        account.balanceCheckedAt = OffsetDateTime.now()
+        AccountBalanceResponse(
+            accountId = id,
+            balance = account.balance,
+            currency = account.currency,
+            status = account.status.uppercase().let {
+                runCatching { AccountStatus.valueOf(it) }.getOrDefault(AccountStatus.UNKNOWN)
+            },
+            checkedAt = account.balanceCheckedAt?.toString()
         )
-        val amount = candidates.firstOrNull { it.isNumber || it.isTextual }?.asDouble()
-        val currency = body.path("data").path("usage").path("currency").asText(
-            body.path("balance_infos").get(0).path("currency").asText(
-                body.path("currency").asText("USD")
-            )
-        )
-        return amount to currency
+    }
+
+    private fun toResponse(account: ProviderAccount): ProviderAccountResponse {
+        val models = providerModelRepository.findByProviderIdOrderByModelIdAsc(account.id ?: 0L)
+        return ProviderAccountMapper.toResponse(account, models)
+    }
+
+    private fun headers(apiKey: String): Map<String, String> = mapOf("Authorization" to "Bearer $apiKey")
+
+    private fun validateEndpoint(value: String) {
+        val uri = runCatching { URI(value) }.getOrElse { throw IllegalArgumentException("Invalid endpoint URL: $value") }
+        require(uri.scheme == "http" || uri.scheme == "https") { "Endpoint URL must use http or https" }
+        require(!uri.host.isNullOrBlank()) { "Endpoint URL must include a host" }
     }
 }

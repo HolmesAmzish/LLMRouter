@@ -3,10 +3,6 @@ package cn.arorms.llm.router.common.responses
 import cn.arorms.llm.router.common.enums.AccountStatus
 import cn.arorms.llm.router.common.enums.Protocol
 
-/**
- * Admin-facing representation of an upstream provider and all supported
- * protocol endpoints.
- */
 data class ProviderAccountResponse(
     val id: Long,
     val name: String,
@@ -17,6 +13,7 @@ data class ProviderAccountResponse(
     val balanceEndpoint: String?,
     val modelMapping: Map<String, String>,
     val configuration: Map<String, String>,
+    val models: List<ProviderModelResponse> = emptyList(),
     val status: AccountStatus = AccountStatus.UNKNOWN,
     val balance: Double? = null,
     val currency: String? = null,

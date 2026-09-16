@@ -1,6 +1,6 @@
 ### Get openai response
 POST {{baseUrl}}/v1/chat/completions
-Authorization: Bearer {{apiKey}}
+X-Api-Key: {{apiKey}}
 Content-Type: application/json
 
 {

@@ -3,6 +3,7 @@ package cn.arorms.llm.router.app.adapters
 import cn.arorms.llm.router.common.enums.PartType
 import cn.arorms.llm.router.common.enums.Protocol
 import cn.arorms.llm.router.common.enums.ThinkingEffort
+import cn.arorms.llm.router.common.enums.TokenInputSemantics
 import cn.arorms.llm.router.common.requests.ChatRequest
 import cn.arorms.llm.router.common.responses.ChatChoice
 import cn.arorms.llm.router.common.responses.ChatMessage
@@ -447,7 +448,21 @@ object Adapters {
     private fun parseOpenAiUsage(body: JsonNode): Usage? {
         val usage = body.path("usage")
         if (!usage.isObject) return null
-        return Usage(usage.path("prompt_tokens").asLong(0), usage.path("completion_tokens").asLong(0))
+        val inputTokens = usage.path("prompt_tokens").asLong(0)
+        val outputTokens = usage.path("completion_tokens").asLong(0)
+        val cacheReadTokens = usageLong(usage, "/cache_read_input_tokens", "/input_tokens_details/cached_tokens", "/prompt_tokens_details/cached_tokens", "/prompt_cache_hit_tokens")
+        val cacheCreationTokens = usageLong(usage, "/cache_creation_input_tokens", "/input_tokens_details/cache_write_tokens", "/prompt_tokens_details/cache_write_tokens")
+        val reasoningTokens = usageLong(usage, "/completion_tokens_details/reasoning_tokens", "/output_tokens_details/reasoning_tokens")
+        return Usage(
+            inputTokens = inputTokens,
+            outputTokens = outputTokens,
+            totalTokens = usage.path("total_tokens").asLong(inputTokens + outputTokens),
+            cacheReadTokens = cacheReadTokens,
+            cacheCreationTokens = cacheCreationTokens,
+            reasoningTokens = reasoningTokens.takeIf { it > 0 },
+            inputTokenSemantics = TokenInputSemantics.TOTAL,
+            tokenDetails = tokenDetails(usage, "prompt_cache_miss_tokens", "audio_tokens", "server_tool_use", "web_search_requests")
+        )
     }
 
     private fun parseOpenAiResponsesChoice(body: JsonNode): ChatChoice {
@@ -470,13 +485,54 @@ object Adapters {
     private fun parseOpenAiResponsesUsage(body: JsonNode): Usage? {
         val usage = body.path("usage")
         if (!usage.isObject) return null
-        return Usage(usage.path("input_tokens").asLong(0), usage.path("output_tokens").asLong(0))
+        val inputTokens = usage.path("input_tokens").asLong(0)
+        val outputTokens = usage.path("output_tokens").asLong(0)
+        val cacheReadTokens = usageLong(usage, "/cache_read_input_tokens", "/input_tokens_details/cached_tokens")
+        val cacheCreationTokens = usageLong(usage, "/cache_creation_input_tokens", "/input_tokens_details/cache_write_tokens")
+        val reasoningTokens = usageLong(usage, "/output_tokens_details/reasoning_tokens")
+        return Usage(
+            inputTokens = inputTokens,
+            outputTokens = outputTokens,
+            totalTokens = usage.path("total_tokens").asLong(inputTokens + outputTokens),
+            cacheReadTokens = cacheReadTokens,
+            cacheCreationTokens = cacheCreationTokens,
+            reasoningTokens = reasoningTokens.takeIf { it > 0 },
+            inputTokenSemantics = TokenInputSemantics.TOTAL,
+            tokenDetails = tokenDetails(usage, "prompt_cache_miss_tokens", "audio_tokens", "server_tool_use", "web_search_requests")
+        )
     }
 
     private fun parseAnthropicUsage(body: JsonNode): Usage? {
         val usage = body.path("usage")
         if (!usage.isObject) return null
-        return Usage(usage.path("input_tokens").asLong(0), usage.path("output_tokens").asLong(0))
+        val inputTokens = usage.path("input_tokens").asLong(0)
+        val outputTokens = usage.path("output_tokens").asLong(0)
+        val cacheReadTokens = usage.path("cache_read_input_tokens").asLong(0)
+        val cacheCreationTokens = usage.path("cache_creation_input_tokens").asLong(0)
+        val serverToolUse = usage.path("server_tool_use")
+        val tokenDetails = buildMap {
+            usage.path("prompt_cache_miss_tokens").takeIf { it.isNumber }?.let { put("prompt_cache_miss_tokens", it.asLong()) }
+            serverToolUse.path("web_search_requests").takeIf { it.isNumber }?.let { put("web_search_requests", it.asLong()) }
+            serverToolUse.path("web_fetch_requests").takeIf { it.isNumber }?.let { put("web_fetch_requests", it.asLong()) }
+        }
+        return Usage(
+            inputTokens = inputTokens,
+            outputTokens = outputTokens,
+            totalTokens = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens,
+            cacheReadTokens = cacheReadTokens,
+            cacheCreationTokens = cacheCreationTokens,
+            inputTokenSemantics = TokenInputSemantics.FRESH,
+            tokenDetails = tokenDetails
+        )
+    }
+
+    private fun usageLong(node: JsonNode, vararg paths: String): Long =
+        paths.firstNotNullOfOrNull { node.at(it).takeIf { value -> value.isNumber }?.asLong() } ?: 0L
+
+    private fun tokenDetails(node: JsonNode, vararg fields: String): Map<String, Long> = buildMap {
+        fields.forEach { field ->
+            node.at("/$field").takeIf { it.isNumber }?.let { put(field, it.asLong()) }
+        }
     }
 
     private fun parseGeminiUsage(body: JsonNode): Usage? {

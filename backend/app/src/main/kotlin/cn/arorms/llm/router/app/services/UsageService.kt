@@ -23,7 +23,7 @@ class UsageService(
         val from = filter.from?.let { LocalDateTime.parse(it, time) }
         val to = filter.to?.let { LocalDateTime.parse(it, time) }
         val (records, total) = queryRepository.page(
-            from, to, filter.provider, filter.model, filter.sessionId,
+            from, to, filter.provider, filter.accountName, filter.model, filter.sessionId,
             filter.apiKeyId, filter.requestId, filter.page, filter.size
         )
         return UsagePageResponse(
@@ -32,7 +32,7 @@ class UsageService(
             page = filter.page,
             size = filter.size,
             totalTokens = queryRepository.totalTokens(
-            from, to, filter.provider, filter.model, filter.sessionId,
+            from, to, filter.provider, filter.accountName, filter.model, filter.sessionId,
             filter.apiKeyId, filter.requestId
         )
         )

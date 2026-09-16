@@ -10,20 +10,31 @@ import org.springframework.web.bind.annotation.*
 @RequestMapping("/api/v1/usage")
 class UsageController(private val service: UsageService) {
     @GetMapping
-    fun usage(@RequestParam from: String?, @RequestParam to: String?, @RequestParam provider: String?,
-              @RequestParam model: String?, @RequestParam sessionId: String?,
-              @RequestParam page: Int?, @RequestParam size: Int?): UsagePageResponse =
-        service.list(
-            UsageFilter(
-                from = from,
-                to = to,
-                provider = provider,
-                model = model,
-                sessionId = sessionId,
-                page = page ?: 0,
-                size = size ?: 20
-            )
+    fun usage(
+        @RequestParam from: String?,
+        @RequestParam to: String?,
+        @RequestParam provider: String?,
+        @RequestParam accountName: String?,
+        @RequestParam model: String?,
+        @RequestParam sessionId: String?,
+        @RequestParam apiKeyId: Long?,
+        @RequestParam requestId: String?,
+        @RequestParam page: Int?,
+        @RequestParam size: Int?
+    ): UsagePageResponse = service.list(
+        UsageFilter(
+            from = from,
+            to = to,
+            provider = provider,
+            accountName = accountName,
+            model = model,
+            sessionId = sessionId,
+            apiKeyId = apiKeyId,
+            requestId = requestId,
+            page = page ?: 0,
+            size = size ?: 20
         )
+    )
 
     @GetMapping("/sessions/{sessionId}")
     fun session(@PathVariable sessionId: String): SessionResponse = service.sessionStats(sessionId)

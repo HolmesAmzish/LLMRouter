@@ -12,6 +12,7 @@ export type ProviderAccount = {
   balanceEndpoint: string | null
   modelMapping: Record<string, string>
   configuration: Record<string, string>
+  models: ProviderModel[]
   status: string
   balance: number | null
   currency: string | null
@@ -27,27 +28,84 @@ export type ModelResponse = {
   protocol: Protocol
   protocols?: Protocol[]
   ownedBy: string
+  modelName: string
   displayName?: string | null
   upstreamModel: string
   enabled: boolean
-  maxContextTokens?: number | null
-  maxOutputTokens?: number | null
+}
+
+export type ModelPrice = {
+  id: number
+  modelId: string
+  modelName: string
+  ownedBy: string | null
+  enabled: boolean
+  inputCostPerMillion: number | null
+  outputCostPerMillion: number | null
+  cacheReadCostPerMillion: number | null
+  cacheCreationCostPerMillion: number | null
+  currency: string
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export type ModelPriceRequest = {
+  modelId: string
+  modelName: string
+  ownedBy?: string
+  enabled: boolean
+  inputCostPerMillion?: number | null
+  outputCostPerMillion?: number | null
+  cacheReadCostPerMillion?: number | null
+  cacheCreationCostPerMillion?: number | null
+  currency: string
+}
+
+export type ProviderModel = {
+  id: number
+  providerId: number
+  providerName: string
+  modelId: string
+  modelName: string
+  modelPriceId: number | null
+  priced: boolean
+  enabled: boolean
+}
+
+export type ProviderModelRequest = {
+  modelId: string
+  modelName?: string
+  modelPriceId?: number | null
+  enabled: boolean
 }
 
 export type ModelListResponse = { provider: string; objectValue?: string; data: ModelResponse[] }
 
-export type ManualModelRequest = {
-  accountId: number
-  model: string
-  protocol?: Protocol
-  upstreamModel?: string
-  displayName?: string
-  ownedBy?: string
+export type ProviderAccountRequest = {
+  name: string
+  protocolEndpoints: Partial<Record<Protocol, string>>
+  apiKey?: string
   enabled: boolean
-  maxContextTokens?: number
-  maxOutputTokens?: number
+  priority: number
+  weight: number
+  balanceEndpoint?: string
+  modelMapping?: Record<string, string>
+  configuration?: Record<string, string>
+  models: ProviderModelRequest[]
 }
 
+export type ProviderAccountPatch = {
+  name?: string
+  protocolEndpoints?: Partial<Record<Protocol, string>>
+  apiKey?: string
+  enabled?: boolean
+  priority?: number
+  weight?: number
+  balanceEndpoint?: string
+  modelMapping?: Record<string, string>
+  configuration?: Record<string, string>
+  models?: ProviderModelRequest[]
+}
 export type ApiKey = {
   id: number
   name: string
@@ -81,26 +139,32 @@ export type SessionResponse = {
 
 export type UsageRecord = {
   id: number
-  requestId?: string
+  requestId: string
   sessionId: string | null
-  apiKeyId?: number | null
-  apiKeyName?: string | null
+  apiKeyId: number | null
+  apiKeyName: string | null
   provider: string
   accountName: string | null
   model: string
-  publicModel?: string
-  upstreamModel?: string
+  publicModel: string
+  upstreamModel: string
   protocol: Protocol
   inputTokens: number
   outputTokens: number
   totalTokens: number
-  costCents: number | null
+  cacheReadTokens: number
+  cacheCreationTokens: number
+  reasoningTokens?: number | null
+  realTotalTokens: number
+  inputTokenSemantics: 'UNKNOWN' | 'TOTAL' | 'FRESH'
+  isStreaming: boolean
   latencyMs: number
-  firstTokenMs?: number | null
-  apiBase?: string | null
-  cacheHit?: boolean
+  firstTokenMs: number | null
+  apiBase: string | null
+  cacheHit: boolean
+  dataSource: 'UPSTREAM' | 'ROUTER_CACHE'
   status: string
-  statusCode?: number | null
+  statusCode: number | null
   createdAt: string | null
 }
 

@@ -1,6 +1,7 @@
 package cn.arorms.llm.router.app.adapters
 
 import cn.arorms.llm.router.common.enums.Protocol
+import cn.arorms.llm.router.common.enums.TokenInputSemantics
 import cn.arorms.llm.router.common.responses.ChatStreamChunk
 import cn.arorms.llm.router.common.responses.Usage
 import com.fasterxml.jackson.databind.JsonNode
@@ -50,9 +51,33 @@ object StreamAdapters {
             delta = delta.path("content").asText(""),
             finishReason = choice.path("finish_reason").asText(null),
             usage = usage?.let {
+                val inputTokens = it.path("prompt_tokens").asLong(0)
+                val outputTokens = it.path("completion_tokens").asLong(0)
+                val cacheReadTokens = usageLong(
+                    it,
+                    "/cache_read_input_tokens",
+                    "/input_tokens_details/cached_tokens",
+                    "/prompt_tokens_details/cached_tokens",
+                    "/prompt_cache_hit_tokens"
+                )
+                val cacheCreationTokens = usageLong(
+                    it,
+                    "/cache_creation_input_tokens",
+                    "/input_tokens_details/cache_write_tokens",
+                    "/prompt_tokens_details/cache_write_tokens"
+                )
                 Usage(
-                    inputTokens = it.path("prompt_tokens").asLong(0),
-                    outputTokens = it.path("completion_tokens").asLong(0)
+                    inputTokens = inputTokens,
+                    outputTokens = outputTokens,
+                    totalTokens = it.path("total_tokens").asLong(inputTokens + outputTokens),
+                    cacheReadTokens = cacheReadTokens,
+                    cacheCreationTokens = cacheCreationTokens,
+                    reasoningTokens = usageLong(
+                        it,
+                        "/completion_tokens_details/reasoning_tokens",
+                        "/output_tokens_details/reasoning_tokens"
+                    ).takeIf { value -> value > 0 },
+                    inputTokenSemantics = TokenInputSemantics.TOTAL
                 )
             }
         )
@@ -88,10 +113,19 @@ object StreamAdapters {
                     index = 0,
                     delta = "",
                     finishReason = response.path("status").asText("completed"),
-                    usage = Usage(
-                        inputTokens = response.path("usage").path("input_tokens").asLong(0),
-                        outputTokens = response.path("usage").path("output_tokens").asLong(0)
-                    )
+                    usage = response.path("usage").takeIf { it.isObject }?.let {
+                        val inputTokens = it.path("input_tokens").asLong(0)
+                        val outputTokens = it.path("output_tokens").asLong(0)
+                        Usage(
+                            inputTokens = inputTokens,
+                            outputTokens = outputTokens,
+                            totalTokens = it.path("total_tokens").asLong(inputTokens + outputTokens),
+                            cacheReadTokens = usageLong(it, "/cache_read_input_tokens", "/input_tokens_details/cached_tokens"),
+                            cacheCreationTokens = usageLong(it, "/cache_creation_input_tokens", "/input_tokens_details/cache_write_tokens"),
+                            reasoningTokens = usageLong(it, "/output_tokens_details/reasoning_tokens").takeIf { value -> value > 0 },
+                            inputTokenSemantics = TokenInputSemantics.TOTAL
+                        )
+                    }
                 )
             }
             else -> null
@@ -107,10 +141,19 @@ object StreamAdapters {
                 model = message.path("model").asText(""),
                 index = 0,
                 delta = "",
-                usage = Usage(
-                    inputTokens = message.path("usage").path("input_tokens").asLong(0),
-                    outputTokens = message.path("usage").path("output_tokens").asLong(0)
-                )
+                usage = message.path("usage").takeIf { it.isObject }?.let {
+                    val inputTokens = it.path("input_tokens").asLong(0)
+                    val cacheReadTokens = it.path("cache_read_input_tokens").asLong(0)
+                    val cacheCreationTokens = it.path("cache_creation_input_tokens").asLong(0)
+                    Usage(
+                        inputTokens = inputTokens,
+                        outputTokens = it.path("output_tokens").asLong(0),
+                        totalTokens = inputTokens + it.path("output_tokens").asLong(0) + cacheReadTokens + cacheCreationTokens,
+                        cacheReadTokens = cacheReadTokens,
+                        cacheCreationTokens = cacheCreationTokens,
+                        inputTokenSemantics = TokenInputSemantics.FRESH
+                    )
+                }
             )
             "content_block_delta" -> ChatStreamChunk(
                 id = "",
@@ -126,10 +169,19 @@ object StreamAdapters {
                 index = 0,
                 delta = "",
                 finishReason = node.path("delta").path("stop_reason").asText(null),
-                usage = Usage(
-                    inputTokens = 0,
-                    outputTokens = node.path("usage").path("output_tokens").asLong(0)
-                )
+                usage = node.path("usage").takeIf { it.isObject }?.let {
+                    val outputTokens = it.path("output_tokens").asLong(0)
+                    val cacheReadTokens = it.path("cache_read_input_tokens").asLong(0)
+                    val cacheCreationTokens = it.path("cache_creation_input_tokens").asLong(0)
+                    Usage(
+                        inputTokens = it.path("input_tokens").asLong(0),
+                        outputTokens = outputTokens,
+                        totalTokens = outputTokens + cacheReadTokens + cacheCreationTokens,
+                        cacheReadTokens = cacheReadTokens,
+                        cacheCreationTokens = cacheCreationTokens,
+                        inputTokenSemantics = TokenInputSemantics.FRESH
+                    )
+                }
             )
             else -> null
         }
@@ -154,6 +206,9 @@ object StreamAdapters {
             }
         )
     }
+
+    private fun usageLong(node: JsonNode, vararg paths: String): Long =
+        paths.firstNotNullOfOrNull { node.at(it).takeIf { value -> value.isNumber }?.asLong() } ?: 0L
 
     private fun openAiFrame(chunk: ChatStreamChunk?, state: InboundStreamState): SseFrame {
         if (chunk == null) return SseFrame(data = "[DONE]")

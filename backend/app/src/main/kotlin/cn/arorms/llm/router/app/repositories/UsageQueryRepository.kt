@@ -3,6 +3,7 @@ package cn.arorms.llm.router.app.repositories
 import cn.arorms.framework.common.domain.QBaseEntity
 import cn.arorms.llm.router.app.entities.QUsageRecord
 import cn.arorms.llm.router.app.entities.UsageRecord
+import com.querydsl.core.BooleanBuilder
 import com.querydsl.jpa.impl.JPAQueryFactory
 import jakarta.persistence.EntityManager
 import org.springframework.stereotype.Repository
@@ -21,6 +22,7 @@ class UsageQueryRepository(
         from: LocalDateTime?,
         to: LocalDateTime?,
         provider: String?,
+        accountName: String?,
         model: String?,
         sessionId: String?,
         apiKeyId: Long?,
@@ -28,14 +30,7 @@ class UsageQueryRepository(
         page: Int,
         size: Int
     ): Pair<List<UsageRecord>, Long> {
-        val predicate = base.createdAt.goe(from ?: LocalDateTime.MIN)
-            .and(base.createdAt.loe(to ?: LocalDateTime.MAX))
-            .and(provider?.let { usage.provider.eq(it) })
-            .and(model?.let { usage.model.eq(it) })
-            .and(sessionId?.let { usage.sessionId.eq(it) })
-            .and(apiKeyId?.let { usage.apiKeyId.eq(it) })
-            .and(requestId?.let { usage.requestId.eq(it) })
-
+        val predicate = predicate(from, to, provider, accountName, model, sessionId, apiKeyId, requestId)
         val content = queryFactory.selectFrom(usage)
             .where(predicate)
             .orderBy(base.createdAt.desc())
@@ -53,21 +48,33 @@ class UsageQueryRepository(
         from: LocalDateTime?,
         to: LocalDateTime?,
         provider: String?,
+        accountName: String?,
         model: String?,
         sessionId: String?,
         apiKeyId: Long?,
         requestId: String?
-    ): Long {
-        val predicate = base.createdAt.goe(from ?: LocalDateTime.MIN)
-            .and(base.createdAt.loe(to ?: LocalDateTime.MAX))
-            .and(provider?.let { usage.provider.eq(it) })
-            .and(model?.let { usage.model.eq(it) })
-            .and(sessionId?.let { usage.sessionId.eq(it) })
-            .and(apiKeyId?.let { usage.apiKeyId.eq(it) })
-            .and(requestId?.let { usage.requestId.eq(it) })
-        return queryFactory.select(usage.totalTokens.sum())
-            .from(usage)
-            .where(predicate)
-            .fetchOne() ?: 0L
+    ): Long = queryFactory.select(usage.totalTokens.sum())
+        .from(usage)
+        .where(predicate(from, to, provider, accountName, model, sessionId, apiKeyId, requestId))
+        .fetchOne() ?: 0L
+
+    private fun predicate(
+        from: LocalDateTime?,
+        to: LocalDateTime?,
+        provider: String?,
+        accountName: String?,
+        model: String?,
+        sessionId: String?,
+        apiKeyId: Long?,
+        requestId: String?
+    ): BooleanBuilder = BooleanBuilder().apply {
+        from?.let { and(base.createdAt.goe(it)) }
+        to?.let { and(base.createdAt.loe(it)) }
+        provider?.let { and(usage.provider.eq(it)) }
+        accountName?.let { and(usage.accountName.eq(it)) }
+        model?.let { and(usage.model.eq(it)) }
+        sessionId?.let { and(usage.sessionId.eq(it)) }
+        apiKeyId?.let { and(usage.apiKeyId.eq(it)) }
+        requestId?.let { and(usage.requestId.eq(it)) }
     }
 }

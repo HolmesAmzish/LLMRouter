@@ -3,7 +3,7 @@ package cn.arorms.llm.router.common.responses
 import cn.arorms.llm.router.common.enums.Protocol
 
 /**
- * One model deployment exposed by the router.
+ * A model exposed through one or more provider endpoints.
  */
 data class ModelResponse(
     val id: String,
@@ -12,10 +12,8 @@ data class ModelResponse(
     val protocol: Protocol,
     val protocols: Set<Protocol> = setOf(protocol),
     val ownedBy: String,
+    val modelName: String,
     val displayName: String? = null,
     val upstreamModel: String,
-    val enabled: Boolean = true,
-    val maxContextTokens: Int? = null,
-    val maxOutputTokens: Int? = null,
-    val supportedFeatures: Set<String> = emptySet()
+    val enabled: Boolean = true
 )

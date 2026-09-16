@@ -2,10 +2,8 @@ package cn.arorms.llm.router.app.controllers
 
 import cn.arorms.llm.router.app.services.ModelService
 import cn.arorms.llm.router.common.enums.Protocol
-import cn.arorms.llm.router.common.requests.ManualModelRequest
 import cn.arorms.llm.router.common.responses.ModelListResponse
-import cn.arorms.llm.router.common.responses.ModelResponse
-import jakarta.validation.Valid
+import cn.arorms.llm.router.common.responses.ProviderModelResponse
 import org.springframework.web.bind.annotation.*
 
 @RestController
@@ -17,14 +15,16 @@ class ModelController(private val service: ModelService) {
     @GetMapping("/upstream")
     suspend fun upstream(@RequestParam protocol: Protocol): ModelListResponse = service.remoteModels(protocol)
 
-    @PostMapping
-    fun create(@Valid @RequestBody request: ManualModelRequest): ModelResponse = service.create(request)
+    @PatchMapping("/provider-models/{id}")
+    fun updateProviderModel(
+        @PathVariable id: Long,
+        @RequestParam enabled: Boolean
+    ): ProviderModelResponse {
+        return service.setProviderModelEnabled(id, enabled)
+    }
 
-    @PatchMapping("/{id}")
-    fun update(@PathVariable id: Long, @RequestParam enabled: Boolean): ModelResponse = service.setEnabled(id, enabled)
-
-    @DeleteMapping("/{id}")
-    fun delete(@PathVariable id: Long) = service.delete(id)
+    @DeleteMapping("/provider-models/{id}")
+    fun deleteProviderModel(@PathVariable id: Long) = service.deleteProviderModel(id)
 
     @PostMapping("/accounts/{accountId}/sync")
     suspend fun sync(@PathVariable accountId: Long): ModelListResponse = service.sync(accountId)

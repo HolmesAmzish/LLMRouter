@@ -1,12 +1,19 @@
 package cn.arorms.llm.router.app.services
 
-import cn.arorms.llm.router.app.entities.ModelCatalog
-import cn.arorms.llm.router.app.repositories.ModelCatalogRepository
+import cn.arorms.llm.router.app.entities.Model
+import cn.arorms.llm.router.app.entities.ProviderAccount
+import cn.arorms.llm.router.app.entities.ProviderModel
+import cn.arorms.llm.router.app.repositories.ModelRepository
 import cn.arorms.llm.router.app.repositories.ProviderAccountRepository
+import cn.arorms.llm.router.app.repositories.ProviderModelRepository
 import cn.arorms.llm.router.common.enums.Protocol
-import cn.arorms.llm.router.common.requests.ManualModelRequest
+import cn.arorms.llm.router.common.requests.ModelPricePatch
+import cn.arorms.llm.router.common.requests.ModelPriceRequest
+import cn.arorms.llm.router.common.requests.ProviderModelRequest
 import cn.arorms.llm.router.common.responses.ModelListResponse
+import cn.arorms.llm.router.common.responses.ModelPriceResponse
 import cn.arorms.llm.router.common.responses.ModelResponse
+import cn.arorms.llm.router.common.responses.ProviderModelResponse
 import com.fasterxml.jackson.databind.ObjectMapper
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -15,63 +22,101 @@ import org.springframework.transaction.annotation.Transactional
 
 @Service
 class ModelService(
+    private val modelRepository: ModelRepository,
+    private val providerModelRepository: ProviderModelRepository,
     private val accountRepository: ProviderAccountRepository,
-    private val catalogRepository: ModelCatalogRepository,
     private val httpClient: GatewayHttpClient,
     private val mapper: ObjectMapper
 ) {
     @Transactional
-    fun localModels(): ModelListResponse {
-        val enabledAccountIds = accountRepository.findAll().filter { it.enabled }.mapNotNull { it.id }.toSet()
-        val grouped = catalogRepository.findByEnabledTrue()
-            .filter { it.accountId in enabledAccountIds }
-            .groupBy { it.publicName ?: "${it.provider}/${it.modelId}" }
-        return ModelListResponse(
-            provider = "llm-router",
-            data = grouped.map { (_, deployments) ->
-                deployments.first().toResponse(protocols = deployments.map { it.protocol }.toSet())
-            }
-        )
-    }
+    fun listPrices(): List<ModelPriceResponse> =
+        modelRepository.findAllByOrderByIdDesc().map { it.toResponse() }
 
     @Transactional
-    fun create(request: ManualModelRequest): ModelResponse {
-        val account = accountRepository.findById(request.accountId).orElseThrow()
-        require(request.model.isNotBlank() && !request.model.contains('/')) { "Model name must not be blank or contain '/'" }
-        require(!catalogRepository.existsByAccountIdAndModelIdAndProtocol(account.id ?: 0L, request.model, request.protocol)) {
-            "Model ${request.model} already exists for ${account.name}/${request.protocol}"
-        }
-        require(account.supports(request.protocol)) {
-            "${account.name} does not support ${request.protocol}"
-        }
-        val protocol = request.protocol
-        return catalogRepository.save(
-            ModelCatalog(
-                accountId = account.id ?: 0L,
-                provider = account.name,
-                protocol = protocol,
-                modelId = request.model,
-                publicName = "${account.name}/${request.model}",
-                upstreamModel = request.upstreamModel ?: request.model,
-                ownedBy = request.ownedBy ?: account.name,
-                displayName = request.displayName,
+    fun createPrice(request: ModelPriceRequest): ModelPriceResponse {
+        val modelId = request.modelId.trim()
+        require(modelId.isNotBlank()) { "Model id must not be blank" }
+        require(!modelRepository.existsByModelId(modelId)) { "Model $modelId already exists" }
+        val model = modelRepository.save(
+            Model(
+                modelId = modelId,
+                modelName = request.modelName.trim().ifBlank { modelId },
+                ownedBy = request.ownedBy?.trim()?.takeIf { it.isNotEmpty() },
                 enabled = request.enabled,
-                manual = true,
-                maxContextTokens = request.maxContextTokens,
-                maxOutputTokens = request.maxOutputTokens
+                inputCostPerMillion = request.inputCostPerMillion,
+                outputCostPerMillion = request.outputCostPerMillion,
+                cacheReadCostPerMillion = request.cacheReadCostPerMillion,
+                cacheCreationCostPerMillion = request.cacheCreationCostPerMillion,
+                currency = request.currency.trim().ifBlank { "USD" }.uppercase()
             )
-        ).toResponse()
-    }
-
-    @Transactional
-    fun setEnabled(id: Long, enabled: Boolean): ModelResponse {
-        val model = catalogRepository.findById(id).orElseThrow()
-        model.enabled = enabled
+        )
+        linkProviderModels(model)
         return model.toResponse()
     }
 
     @Transactional
-    fun delete(id: Long) = catalogRepository.deleteById(id)
+    fun updatePrice(id: Long, patch: ModelPricePatch): ModelPriceResponse {
+        val model = modelRepository.findById(id).orElseThrow()
+        patch.modelName?.takeIf { it.isNotBlank() }?.let { model.modelName = it.trim() }
+        patch.ownedBy?.let { model.ownedBy = it.trim().takeIf { value -> value.isNotEmpty() } }
+        patch.enabled?.let { model.enabled = it }
+        patch.inputCostPerMillion?.let { model.inputCostPerMillion = it }
+        patch.outputCostPerMillion?.let { model.outputCostPerMillion = it }
+        patch.cacheReadCostPerMillion?.let { model.cacheReadCostPerMillion = it }
+        patch.cacheCreationCostPerMillion?.let { model.cacheCreationCostPerMillion = it }
+        patch.currency?.takeIf { it.isNotBlank() }?.let { model.currency = it.trim().uppercase() }
+        val saved = modelRepository.save(model)
+        linkProviderModels(saved)
+        return saved.toResponse()
+    }
+
+    @Transactional
+    fun deletePrice(id: Long) {
+        providerModelRepository.clearModelDefinition(id)
+        modelRepository.deleteById(id)
+    }
+
+    @Transactional
+    fun replaceProviderModels(providerId: Long, providerName: String, requests: List<ProviderModelRequest>) {
+        val normalized = requests.map { it.copy(modelId = it.modelId.trim(), modelName = it.modelName?.trim()?.ifBlank { null }) }
+        val duplicate = normalized.groupBy { it.modelId }.filterKeys { it.isNotBlank() }.any { it.value.size > 1 }
+        require(!duplicate) { "Model ids must be unique within a provider" }
+        providerModelRepository.deleteByProviderId(providerId)
+        val models = requests.mapNotNull { request ->
+            val modelId = request.modelId.trim().takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            ProviderModel(
+                providerId = providerId,
+                providerName = providerName,
+                modelId = modelId,
+                modelName = request.modelName?.trim()?.ifBlank { null } ?: modelId,
+                modelDefinitionId = resolveModelDefinitionId(request.modelPriceId, modelId),
+                enabled = request.enabled
+            )
+        }
+        providerModelRepository.saveAll(models)
+    }
+
+    @Transactional
+    fun setProviderModelEnabled(id: Long, enabled: Boolean): ProviderModelResponse {
+        val binding = providerModelRepository.findById(id).orElseThrow()
+        binding.enabled = enabled
+        return providerModelRepository.save(binding).toResponse()
+    }
+
+    @Transactional
+    fun deleteProviderModel(id: Long) = providerModelRepository.deleteById(id)
+
+    @Transactional
+    fun localModels(): ModelListResponse {
+        val accountsById = accountRepository.findAll().associateBy { it.id }
+        val bindings = providerModelRepository.findByEnabledTrue()
+            .filter { accountsById[it.providerId]?.enabled == true }
+            .sortedBy { "${it.providerName}/${it.modelId}" }
+        return ModelListResponse(
+            provider = "llm-router",
+            data = bindings.map { binding -> binding.toGatewayModel(accountsById.getValue(binding.providerId)) }
+        )
+    }
 
     suspend fun remoteModels(protocol: Protocol): ModelListResponse = withContext(Dispatchers.IO) {
         val results = accountRepository.findByEnabledTrueOrderByPriorityAscIdAsc()
@@ -94,29 +139,39 @@ class ModelService(
         require(account.supports(protocol)) { "${account.name} does not support $protocol" }
         val modelsEndpoint = account.configuration["modelsEndpoint"]
             ?: throw IllegalArgumentException("Configure modelsEndpoint before syncing ${account.name}")
-        val upstreamModels = fetchUpstreamModels(account.id, account.name, protocol, modelsEndpoint, account.apiKey)
-        val existing = catalogRepository.findByAccountIdAndProtocol(accountId, protocol)
-        val existingByModel = existing.associateBy { it.modelId }
-        val synced = upstreamModels.map { response ->
-            val current = existingByModel[response.model]
-            current?.apply {
-                this.ownedBy = response.ownedBy
-            } ?: ModelCatalog(
-                accountId = accountId,
-                provider = account.name,
-                protocol = protocol,
-                modelId = response.model,
-                publicName = "${account.name}/${response.model}",
-                upstreamModel = response.model,
-                ownedBy = response.ownedBy,
-                displayName = response.displayName,
-                enabled = true,
-                manual = false
-            )
+        fetchUpstreamModels(accountId, account.name, protocol, modelsEndpoint, account.apiKey).forEach { response ->
+            val current = providerModelRepository.findByProviderIdAndModelId(accountId, response.model)
+            if (current == null) {
+                providerModelRepository.save(
+                    ProviderModel(
+                        providerId = accountId,
+                        providerName = account.name,
+                        modelId = response.model,
+                        modelName = response.modelName,
+                        modelDefinitionId = modelRepository.findByModelId(response.model)?.id,
+                        enabled = true
+                    )
+                )
+            } else {
+                current.providerName = account.name
+                current.modelName = response.modelName
+                current.modelDefinitionId = current.modelDefinitionId
+                    ?: modelRepository.findByModelId(response.model)?.id
+                providerModelRepository.save(current)
+            }
         }
-        val manualModels = existing.filter { it.manual && it.modelId !in synced.map(ModelCatalog::modelId) }
-        catalogRepository.saveAll(synced + manualModels)
-        ModelListResponse(protocol.name.lowercase(), data = (synced + manualModels).map { it.toResponse() })
+        ModelListResponse(
+            protocol.name.lowercase(),
+            data = providerModelRepository.findByProviderIdOrderByModelIdAsc(accountId)
+                .map { binding -> binding.toGatewayModel(account) }
+        )
+    }
+
+    private fun linkProviderModels(model: Model) {
+        providerModelRepository.findByModelId(model.modelId).forEach { binding ->
+            binding.modelDefinitionId = model.id
+            providerModelRepository.save(binding)
+        }
     }
 
     private suspend fun fetchUpstreamModels(
@@ -138,23 +193,60 @@ class ModelService(
                 provider = provider,
                 model = modelId,
                 protocol = protocol,
+                modelName = it.path("name").asText(it.path("display_name").asText(modelId)),
                 upstreamModel = modelId,
                 ownedBy = it.path("owned_by").asText(it.path("ownedBy").asText(provider))
             )
         }
     }
 
-    private fun ModelCatalog.toResponse(protocols: Set<cn.arorms.llm.router.common.enums.Protocol> = setOf(protocol)) = ModelResponse(
-        id = publicName ?: "$provider/$modelId",
-        provider = provider,
+    private fun resolveModelDefinitionId(modelPriceId: Long?, modelId: String): Long? {
+        modelPriceId?.let { explicit ->
+            modelRepository.findById(explicit).orElse(null)?.let { model ->
+                if (model.modelId == modelId) return model.id
+            }
+        }
+        return modelRepository.findByModelId(modelId)?.id
+    }
+
+    private fun ProviderModel.toGatewayModel(account: ProviderAccount) = ModelResponse(
+        id = "$providerName/$modelId",
+        provider = providerName,
         model = modelId,
-        protocol = protocol,
-        protocols = protocols,
-        ownedBy = ownedBy ?: provider,
-        displayName = displayName,
-        upstreamModel = upstreamModel ?: modelId,
+        protocol = account.defaultProtocol,
+        protocols = account.protocolEndpoints.keys.mapNotNull {
+            runCatching { Protocol.valueOf(it) }.getOrNull()
+        }.toSet(),
+        ownedBy = modelRepository.findByModelId(modelId)?.ownedBy ?: providerName,
+        modelName = modelName,
+        displayName = modelRepository.findByModelId(modelId)?.modelName,
+        upstreamModel = account.modelMapping[modelId] ?: modelId,
+        enabled = enabled
+    )
+
+    private fun ProviderModel.toResponse() = ProviderModelResponse(
+        id = id ?: 0L,
+        providerId = providerId,
+        providerName = providerName,
+        modelId = modelId,
+        modelName = modelName,
+        modelPriceId = modelDefinitionId,
+        priced = modelDefinitionId != null,
+        enabled = enabled
+    )
+
+    private fun Model.toResponse() = ModelPriceResponse(
+        id = id ?: 0L,
+        modelId = modelId,
+        modelName = modelName,
+        ownedBy = ownedBy,
         enabled = enabled,
-        maxContextTokens = maxContextTokens,
-        maxOutputTokens = maxOutputTokens
+        inputCostPerMillion = inputCostPerMillion,
+        outputCostPerMillion = outputCostPerMillion,
+        cacheReadCostPerMillion = cacheReadCostPerMillion,
+        cacheCreationCostPerMillion = cacheCreationCostPerMillion,
+        currency = currency,
+        createdAt = createdAt?.toString(),
+        updatedAt = updatedAt?.toString()
     )
 }

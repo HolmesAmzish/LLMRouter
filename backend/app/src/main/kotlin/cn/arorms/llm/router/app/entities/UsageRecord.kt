@@ -2,6 +2,8 @@ package cn.arorms.llm.router.app.entities
 
 import cn.arorms.framework.common.domain.BaseEntity
 import cn.arorms.llm.router.common.enums.Protocol
+import cn.arorms.llm.router.common.enums.TokenInputSemantics
+import cn.arorms.llm.router.common.enums.UsageDataSource
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
 import jakarta.persistence.EnumType
@@ -24,7 +26,9 @@ import java.time.OffsetDateTime
         Index(name = "idx_usage_session_id", columnList = "session_id"),
         Index(name = "idx_usage_provider_model", columnList = "provider,model"),
         Index(name = "idx_usage_api_key", columnList = "api_key_id"),
-        Index(name = "idx_usage_request_id", columnList = "request_id")
+        Index(name = "idx_usage_request_id", columnList = "request_id"),
+        Index(name = "idx_usage_status", columnList = "status"),
+        Index(name = "idx_usage_cache", columnList = "data_source,cache_hit")
     ]
 )
 class UsageRecord(
@@ -68,8 +72,22 @@ class UsageRecord(
     @Column(name = "total_tokens", nullable = false)
     var totalTokens: Long,
 
-    @Column(name = "cost_cents")
-    var costCents: Long?,
+    @Column(name = "cache_read_tokens")
+    var cacheReadTokens: Long? = 0,
+
+    @Column(name = "cache_creation_tokens")
+    var cacheCreationTokens: Long? = 0,
+
+    @Column(name = "reasoning_tokens")
+    var reasoningTokens: Long? = null,
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "input_token_semantics", length = 24)
+    var inputTokenSemantics: TokenInputSemantics? = TokenInputSemantics.UNKNOWN,
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "token_details", columnDefinition = "jsonb")
+    var tokenDetails: Map<String, Long>? = emptyMap(),
 
     @Column(name = "latency_ms", nullable = false)
     var latencyMs: Long,
@@ -86,11 +104,21 @@ class UsageRecord(
     @Column(name = "cache_key", length = 64)
     var cacheKey: String? = null,
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "data_source", length = 24)
+    var dataSource: UsageDataSource? = UsageDataSource.UPSTREAM,
+
+    @Column(name = "is_streaming")
+    var isStreaming: Boolean? = false,
+
     @Column(nullable = false, length = 32)
     var status: String,
 
     @Column(name = "status_code")
     var statusCode: Int? = null,
+
+    @Column(name = "error_message", columnDefinition = "text")
+    var errorMessage: String? = null,
 
     @Column(name = "started_at")
     var startedAt: OffsetDateTime? = null,
