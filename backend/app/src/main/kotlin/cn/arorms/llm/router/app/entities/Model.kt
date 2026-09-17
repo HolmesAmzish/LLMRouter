@@ -1,8 +1,11 @@
 package cn.arorms.llm.router.app.entities
 
 import cn.arorms.framework.common.domain.BaseEntity
+import cn.arorms.llm.router.common.enums.Currency
 import jakarta.persistence.Column
 import jakarta.persistence.Entity
+import jakarta.persistence.EnumType
+import jakarta.persistence.Enumerated
 import jakarta.persistence.Index
 import jakarta.persistence.Table
 import jakarta.persistence.UniqueConstraint
@@ -31,6 +34,7 @@ class Model(
     var cacheReadCostPerMillion: BigDecimal? = null,
     @Column(name = "cache_creation_cost_per_million", precision = 20, scale = 8)
     var cacheCreationCostPerMillion: BigDecimal? = null,
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 8)
-    var currency: String = "USD"
+    var currency: Currency = Currency.USD
 ) : BaseEntity()

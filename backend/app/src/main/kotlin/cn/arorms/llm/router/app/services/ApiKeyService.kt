@@ -4,8 +4,10 @@ import cn.arorms.llm.router.app.entities.ApiKey
 import cn.arorms.llm.router.app.repositories.ApiKeyRepository
 import cn.arorms.llm.router.common.requests.ApiKeyRequest
 import cn.arorms.llm.router.common.responses.ApiKeyResponse
+import org.springframework.http.HttpStatus
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import org.springframework.web.server.ResponseStatusException
 import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -48,6 +50,20 @@ class ApiKeyService(private val repository: ApiKeyRepository) {
 
     @Transactional
     fun delete(id: Long) = repository.deleteById(id)
+
+    @Transactional
+    fun requireForPlayground(id: Long): ApiKey {
+        val key = repository.findById(id).orElseThrow()
+        val now = OffsetDateTime.now()
+        if (!key.enabled || key.expiresAt?.isBefore(now) == true) {
+            throw ResponseStatusException(HttpStatus.UNAUTHORIZED, "API key is disabled or expired")
+        }
+        if (key.maxBudget != null && (key.spend ?: BigDecimal.ZERO) >= key.maxBudget) {
+            throw ResponseStatusException(HttpStatus.FORBIDDEN, "API key budget exceeded")
+        }
+        key.lastUsedAt = now
+        return key
+    }
 
     @Transactional
     fun authenticate(rawKey: String): ApiKey? {

@@ -1,0 +1,2 @@
+### Health
+GET {{baseUrl}}/actuator/health

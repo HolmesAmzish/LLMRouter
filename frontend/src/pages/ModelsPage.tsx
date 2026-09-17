@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api/api'
-import type { ModelPrice, ModelPriceRequest } from '../types'
+import type { Currency, ModelPrice, ModelPriceRequest } from '../types'
 import { Alert, Badge, Button, Card, CardHeader, EmptyState, Field, inputClass } from '../components/ui'
 
 type Draft = {
@@ -12,7 +12,7 @@ type Draft = {
   outputCostPerMillion: string
   cacheReadCostPerMillion: string
   cacheCreationCostPerMillion: string
-  currency: string
+  currency: Currency
 }
 
 const emptyDraft: Draft = {
@@ -84,7 +84,7 @@ export default function ModelsPage({ onChanged }: { onChanged?: () => void }) {
         outputCostPerMillion: toNumber(draft.outputCostPerMillion) ?? null,
         cacheReadCostPerMillion: toNumber(draft.cacheReadCostPerMillion) ?? null,
         cacheCreationCostPerMillion: toNumber(draft.cacheCreationCostPerMillion) ?? null,
-        currency: draft.currency.trim().toUpperCase() || 'USD',
+        currency: draft.currency,
       }
       if (editingId == null) await api.post<ModelPrice>('/api/v1/models/prices', payload)
       else await api.patch<ModelPrice>(`/api/v1/models/prices/${editingId}`, payload)
@@ -177,7 +177,11 @@ export default function ModelsPage({ onChanged }: { onChanged?: () => void }) {
             <Field label="Cache write / M"><input className={inputClass} type="number" step="any" min="0" value={draft.cacheCreationCostPerMillion} onChange={(event) => setDraft({ ...draft, cacheCreationCostPerMillion: event.target.value })} /></Field>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <Field label="Currency"><input className={inputClass} value={draft.currency} onChange={(event) => setDraft({ ...draft, currency: event.target.value })} /></Field>
+            <Field label="Currency">
+              <select className={inputClass} value={draft.currency} onChange={(event) => setDraft({ ...draft, currency: event.target.value as Currency })}>
+                <option value="USD">USD</option>
+              </select>
+            </Field>
             <label className="flex items-end gap-2 pb-2 text-xs"><input type="checkbox" checked={draft.enabled} onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })} /> Enabled</label>
           </div>
           <div className="flex gap-2">

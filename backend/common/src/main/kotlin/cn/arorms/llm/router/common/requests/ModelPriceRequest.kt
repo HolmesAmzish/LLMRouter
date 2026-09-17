@@ -1,5 +1,6 @@
 package cn.arorms.llm.router.common.requests
 
+import cn.arorms.llm.router.common.enums.Currency
 import java.math.BigDecimal
 
 data class ModelPriceRequest(
@@ -11,5 +12,5 @@ data class ModelPriceRequest(
     val outputCostPerMillion: BigDecimal? = null,
     val cacheReadCostPerMillion: BigDecimal? = null,
     val cacheCreationCostPerMillion: BigDecimal? = null,
-    val currency: String = "USD"
+    val currency: Currency = Currency.USD
 )

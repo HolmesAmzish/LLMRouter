@@ -1,5 +1,5 @@
 export type Protocol = 'OPENAI' | 'OPENAI_RESPONSES' | 'ANTHROPIC'
-// export type Protocol = 'OPENAI' | 'OPENAI_RESPONSES' | 'ANTHROPIC' | 'GEMINI'
+export type Currency = 'USD'
 export type ThinkingEffort = 'NONE' | 'MINIMAL' | 'LOW' | 'MEDIUM' | 'HIGH'
 
 export type ProviderAccount = {
@@ -44,7 +44,7 @@ export type ModelPrice = {
   outputCostPerMillion: number | null
   cacheReadCostPerMillion: number | null
   cacheCreationCostPerMillion: number | null
-  currency: string
+  currency: Currency
   createdAt: string | null
   updatedAt: string | null
 }
@@ -58,7 +58,7 @@ export type ModelPriceRequest = {
   outputCostPerMillion?: number | null
   cacheReadCostPerMillion?: number | null
   cacheCreationCostPerMillion?: number | null
-  currency: string
+  currency: Currency
 }
 
 export type ProviderModel = {
@@ -165,6 +165,16 @@ export type UsageRecord = {
   dataSource: 'UPSTREAM' | 'ROUTER_CACHE'
   status: string
   statusCode: number | null
+  createdAt: string | null
+}
+
+export type WebChatMessage = {
+  id: number
+  role: string
+  content: string
+  model: string | null
+  protocol: Protocol | null
+  status: 'PENDING' | 'COMPLETED' | 'FAILED'
   createdAt: string | null
 }
 

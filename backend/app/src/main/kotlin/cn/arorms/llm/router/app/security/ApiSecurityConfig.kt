@@ -33,6 +33,13 @@ class ApiSecurityConfig(
                     .anyRequest().authenticated()
             }
             .oauth2ResourceServer { oauth2 ->
+                oauth2.bearerTokenResolver { request ->
+                    request.getHeader("Authorization")
+                        ?.takeIf { it.startsWith("Bearer ", ignoreCase = true) }
+                        ?.substring(7)
+                        ?.trim()
+                        ?.takeUnless { it.startsWith("sk-router-") }
+                }
                 oauth2.jwt { jwt -> jwt.jwtAuthenticationConverter(authenticationConverter) }
             }
             .addFilterBefore(

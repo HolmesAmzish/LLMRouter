@@ -1,31 +1,173 @@
-### Chat Completions
-POST https://ark.cn-beijing.volces.com/api/coding/v3/chat/completions
+@volcengineCodingBaseUrl = https://ark.cn-beijing.volces.com/api/coding
+@model = deepseek-v4-flash
+
+# 建议在 HTTP Client 环境中配置：
+# volcengineCodingPlanApiKey=ark-xxxxxxxx
+#
+# 这些请求直接访问火山引擎上游，不经过 llm-router。
+# 判断 Prompt Cache 时重点看流式响应最后一个 usage chunk：
+# usage.prompt_tokens_details.cached_tokens
+# 以及可选的 usage.prompt_cache_hit_tokens。
+
+### Chat Completions - 基础流式
+POST {{volcengineCodingBaseUrl}}/v3/chat/completions
 Authorization: Bearer {{volcengineCodingPlanApiKey}}
 Content-Type: application/json
+Accept: text/event-stream
 
 {
-  "model": "deepseek-v4-flash",
+  "model": "{{model}}",
   "messages": [
     {
       "role": "system",
-      "content": "你是人工智能助手."
+      "content": "你是人工智能助手。"
     },
     {
       "role": "user",
       "content": "你好"
     }
   ],
+  "max_tokens": 128,
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}
+
+
+### Chat Completions - 多轮历史，未超过 1024 token
+# 预期 prompt_tokens 只有几十到几百，cached_tokens 很可能为 0。
+POST {{volcengineCodingBaseUrl}}/v3/chat/completions
+Authorization: Bearer {{volcengineCodingPlanApiKey}}
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "model": "{{model}}",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi"
+    },
+    {
+      "role": "assistant",
+      "content": "Hi! How can I help you today?"
+    },
+    {
+      "role": "user",
+      "content": "介绍一下背包DP"
+    },
+    {
+      "role": "assistant",
+      "content": "背包 DP 是一种动态规划模型，状态通常表示容量或已使用空间，通过选择或不选择物品来更新答案。"
+    },
+    {
+      "role": "user",
+      "content": "给出一些 DP 题目"
+    }
+  ],
+  "max_tokens": 64,
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}
+
+
+### 缓存准备请求 1
+# 先运行本次请求，让相同前缀有机会在上游建立缓存。
+# 关注最终 usage：
+# prompt_tokens
+# prompt_tokens_details.cached_tokens
+POST {{volcengineCodingBaseUrl}}/v3/chat/completions
+Authorization: Bearer {{volcengineCodingPlanApiKey}}
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "model": "{{model}}",
+  "messages": [
+    {
+      "role": "system",
+      "content": "这是一段用于验证上下文缓存的长前缀。上下文缓存通常要求请求前缀稳定，并且达到上游的最小缓存长度。下面重复提供一段固定说明，目的只是让 prompt_tokens 超过 1024。你需要记住这段前缀：链表适合频繁插入和删除，数组适合随机访问，哈希表提供平均 O(1) 查询，红黑树提供有序操作，堆适合维护动态最值，并查集适合维护连通性，线段树适合处理区间查询与区间修改，树状数组适合处理前缀和与单点更新，单调栈用于寻找下一个更大元素，单调队列用于维护滑动窗口最值，拓扑排序用于处理有向无环图，Dijkstra 用于非负权图最短路，Bellman-Ford 可以处理负权边，Floyd 用于多源最短路，Kruskal 和 Prim 用于最小生成树，KMP 用于字符串前缀匹配，Trie 用于字符串集合检索，AC 自动机用于多模式匹配，动态规划适合具有重叠子问题和最优子结构的问题。背包问题包含 0-1 背包、完全背包、多重背包、分组背包、二维费用背包和树上背包。0-1 背包需要倒序遍历容量，完全背包需要正序遍历容量，多重背包可以通过二进制拆分转换为 0-1 背包，分组背包需要先枚举组再倒序枚举容量。区间 DP 通常按区间长度递增，树形 DP 通常后序遍历，状压 DP 使用二进制集合表示状态，数位 DP 通常按位枚举并记录限制状态，概率 DP 需要明确期望的线性性质。排序算法包括冒泡、选择、插入、归并、快速、堆排序和计数排序，二分查找要求序列有序，双指针适合处理单调区间，滑动窗口适合处理连续子数组，前缀和适合快速查询区间和。数据库索引通常使用 B+ 树，事务需要满足原子性、一致性、隔离性和持久性，MVCC 通过版本链减少读写冲突，缓存需要考虑失效、穿透、击穿和雪崩，消息队列需要处理重复消费和顺序消费。现在请只回复：CACHE READY。"
+    },
+    {
+      "role": "user",
+      "content": "只回复 CACHE READY，不要解释。"
+    }
+  ],
+  "max_tokens": 32,
+  "temperature": 0,
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}
+
+
+### 缓存命中请求 2
+# 与“缓存准备请求 1”body 完全一致，紧接着运行。
+# 对比 cached_tokens 是否大于 0。
+POST {{volcengineCodingBaseUrl}}/v3/chat/completions
+Authorization: Bearer {{volcengineCodingPlanApiKey}}
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "model": "{{model}}",
+  "messages": [
+    {
+      "role": "system",
+      "content": "这是一段用于验证上下文缓存的长前缀。上下文缓存通常要求请求前缀稳定，并且达到上游的最小缓存长度。下面重复提供一段固定说明，目的只是让 prompt_tokens 超过 1024。你需要记住这段前缀：链表适合频繁插入和删除，数组适合随机访问，哈希表提供平均 O(1) 查询，红黑树提供有序操作，堆适合维护动态最值，并查集适合维护连通性，线段树适合处理区间查询与区间修改，树状数组适合处理前缀和与单点更新，单调栈用于寻找下一个更大元素，单调队列用于维护滑动窗口最值，拓扑排序用于处理有向无环图，Dijkstra 用于非负权图最短路，Bellman-Ford 可以处理负权边，Floyd 用于多源最短路，Kruskal 和 Prim 用于最小生成树，KMP 用于字符串前缀匹配，Trie 用于字符串集合检索，AC 自动机用于多模式匹配，动态规划适合具有重叠子问题和最优子结构的问题。背包问题包含 0-1 背包、完全背包、多重背包、分组背包、二维费用背包和树上背包。0-1 背包需要倒序遍历容量，完全背包需要正序遍历容量，多重背包可以通过二进制拆分转换为 0-1 背包，分组背包需要先枚举组再倒序枚举容量。区间 DP 通常按区间长度递增，树形 DP 通常后序遍历，状压 DP 使用二进制集合表示状态，数位 DP 通常按位枚举并记录限制状态，概率 DP 需要明确期望的线性性质。排序算法包括冒泡、选择、插入、归并、快速、堆排序和计数排序，二分查找要求序列有序，双指针适合处理单调区间，滑动窗口适合处理连续子数组，前缀和适合快速查询区间和。数据库索引通常使用 B+ 树，事务需要满足原子性、一致性、隔离性和持久性，MVCC 通过版本链减少读写冲突，缓存需要考虑失效、穿透、击穿和雪崩，消息队列需要处理重复消费和顺序消费。现在请只回复：CACHE READY。"
+    },
+    {
+      "role": "user",
+      "content": "只回复 CACHE READY，不要解释。"
+    }
+  ],
+  "max_tokens": 32,
+  "temperature": 0,
+  "stream": true,
+  "stream_options": {
+    "include_usage": true
+  }
+}
+
+
+### Responses - 流式
+POST {{volcengineCodingBaseUrl}}/v3/responses
+Authorization: Bearer {{volcengineCodingPlanApiKey}}
+Content-Type: application/json
+Accept: text/event-stream
+
+{
+  "model": "{{model}}",
+  "input": [
+    {
+      "type": "message",
+      "role": "user",
+      "content": [
+        {
+          "type": "input_text",
+          "text": "请用一句中文解释什么是向量数据库。"
+        }
+      ]
+    }
+  ],
+  "max_output_tokens": 256,
   "stream": true
 }
 
 
-### Message
-POST https://ark.cn-beijing.volces.com/api/coding/v1/messages
+### Anthropic Messages - 流式
+# 保留现有调用路径。需要先确认当前火山引擎账号实际支持的 Messages endpoint。
+POST {{volcengineCodingBaseUrl}}/v1/messages
 Authorization: Bearer {{volcengineCodingPlanApiKey}}
 Content-Type: application/json
+Accept: text/event-stream
 
 {
-  "model": "deepseek-v4-flash",
+  "model": "{{model}}",
   "max_tokens": 256,
   "messages": [
     {
@@ -35,5 +177,3 @@ Content-Type: application/json
   ],
   "stream": true
 }
-
-###

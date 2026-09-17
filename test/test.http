@@ -8,7 +8,32 @@ Content-Type: application/json
   "messages": [
     {
       "role": "user",
-      "content":"Hello"
+      "content": "Hello"
+    }
+  ],
+  "max_tokens": 512,
+  "stream": true
+}
+
+### Chat in History
+POST {{baseUrl}}/v1/chat/completions
+X-Api-Key: {{apiKey}}
+Content-Type: application/json
+
+{
+  "model": "volcengine/deepseek-v4-flash",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hello"
+    },
+    {
+      "role": "assistant",
+      "content": "Hello! How can I help you today?"
+    },
+    {
+      "role": "user",
+      "content": "请用一句中文介绍一下你能做什么。"
     }
   ],
   "max_tokens": 512,

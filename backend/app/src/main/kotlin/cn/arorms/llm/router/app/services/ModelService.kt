@@ -47,7 +47,7 @@ class ModelService(
                 outputCostPerMillion = request.outputCostPerMillion,
                 cacheReadCostPerMillion = request.cacheReadCostPerMillion,
                 cacheCreationCostPerMillion = request.cacheCreationCostPerMillion,
-                currency = request.currency.trim().ifBlank { "USD" }.uppercase()
+                currency = request.currency
             )
         )
         linkProviderModels(model)
@@ -64,7 +64,7 @@ class ModelService(
         patch.outputCostPerMillion?.let { model.outputCostPerMillion = it }
         patch.cacheReadCostPerMillion?.let { model.cacheReadCostPerMillion = it }
         patch.cacheCreationCostPerMillion?.let { model.cacheCreationCostPerMillion = it }
-        patch.currency?.takeIf { it.isNotBlank() }?.let { model.currency = it.trim().uppercase() }
+        patch.currency?.let { model.currency = it }
         val saved = modelRepository.save(model)
         linkProviderModels(saved)
         return saved.toResponse()

@@ -80,8 +80,9 @@ class AccountService(
         patch.configuration?.let { account.configuration = it }
         val saved = repository.save(account)
 
-        if (patch.models != null) {
-            modelService.replaceProviderModels(saved.id ?: 0L, saved.name, patch.models)
+        val requestedModels = patch.models
+        if (requestedModels != null) {
+            modelService.replaceProviderModels(saved.id ?: 0L, saved.name, requestedModels)
         } else if (saved.name != oldName) {
             providerModelRepository.findByProviderIdOrderByModelIdAsc(saved.id ?: 0L).forEach { binding ->
                 binding.providerName = saved.name
@@ -126,7 +127,7 @@ class AccountService(
                 balance = account.balance,
                 currency = account.currency,
                 status = AccountStatus.UNSUPPORTED,
-                checkedAt = account.balanceCheckedAt?.toString()
+                checkedAt = account.balanceCheckedAt?.toString() ?: OffsetDateTime.now().toString()
             )
         }
 
@@ -153,7 +154,7 @@ class AccountService(
             status = account.status.uppercase().let {
                 runCatching { AccountStatus.valueOf(it) }.getOrDefault(AccountStatus.UNKNOWN)
             },
-            checkedAt = account.balanceCheckedAt?.toString()
+            checkedAt = account.balanceCheckedAt?.toString() ?: OffsetDateTime.now().toString()
         )
     }
 
