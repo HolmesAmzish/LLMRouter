@@ -1,3 +1,9 @@
+0.0.8
+1. Add dark theme
+
+0.0.7
+1. Add playground chat messages history
+
 0.0.6
 1. Add model price counting
 

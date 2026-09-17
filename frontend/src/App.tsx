@@ -8,6 +8,7 @@ import SessionsPage from './pages/SessionsPage'
 import UsagePage from './pages/UsagePage'
 import PlaygroundPage from './pages/PlaygroundPage'
 import { ProtectedRoute } from './components/ProtectedRoute'
+import { ThemeToggle } from './components/ThemeToggle'
 import { CallbackPage } from './features/login/CallbackPage'
 import { LoginPage } from './features/login/LoginPage'
 import { useAuth } from './hooks/useAuth'
@@ -61,6 +62,7 @@ function AppShell() {
             <h1 className="text-sm font-medium">{page === 'api-keys' ? 'API Keys' : page === 'docs' ? 'Calling Docs' : page}</h1>
           </div>
           <div className="flex items-center gap-2">
+            <ThemeToggle />
             <button className="h-8 rounded-md border border-border px-3 text-xs" onClick={() => setRefreshKey((key) => key + 1)}>Sync UI</button>
             <div className="flex h-8 items-center gap-2 rounded-md border border-border px-2">
               <div className="grid h-5 w-5 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
